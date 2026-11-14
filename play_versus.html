@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>历史关联网 · 同题对战</title>
+<link rel="stylesheet" href="shared.css?v=20261111">
+</head>
+<body>
+<div id="topnav-root"></div>
+
+<!-- 参数配置面板 -->
+<div class="page" id="paramsWrap">
+  <div class="setup-card">
+    <div class="setup-head">
+      <div class="si">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l6 6M14 14l6 6M4 20l6-6M14 10l6-6"/><path d="M15 4h5v5"/><path d="M4 15v5h5"/></svg>
+      </div>
+      <div>
+        <h3 class="setup-title">准备一局对战</h3>
+        <div class="setup-sub">选好关卡参数后进入房间，系统匹配一名对手，双方收到同一套牌。</div>
+      </div>
+    </div>
+
+    <div class="steps">
+      <div class="step"><span class="sn">1</span>配置对战参数</div>
+      <div class="step-line"></div>
+      <div class="step"><span class="sn">2</span>进入房间等待对手</div>
+      <div class="step-line"></div>
+      <div class="step"><span class="sn">3</span>同题比谁判得准</div>
+    </div>
+
+    <div class="setup-grid">
+      <div class="field">
+        <label>级别（每组得分）</label>
+        <select id="paramLevel"></select>
+      </div>
+      <div class="field">
+        <label>国家</label>
+        <select id="paramNation">
+          <option value="C">中国</option>
+          <option value="F">外国</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>朝代（支持“随机”）</label>
+        <select id="paramEra"></select>
+      </div>
+      <div class="field">
+        <label>计时方式</label>
+        <div class="radio-row" id="paramTimerRow">
+          <div class="radio-chip on" data-t="c">倒计时 3 分钟</div>
+          <div class="radio-chip" data-t="p">正计时</div>
+          <div class="radio-chip" data-t="n">不计时</div>
+        </div>
+        <input type="hidden" id="paramTimer" value="c">
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:24px">
+      <div class="chip">题库共 <strong id="eraPoolSize">0</strong> 条</div>
+      <div class="chip" id="myRoomInfo" style="display:none;background:var(--accent-soft);border-color:rgba(76,175,80,.4);color:var(--accent-ink);font-weight:600"></div>
+      <div class="spacer"></div>
+      <button class="btn ghost" onclick="newParam()">换一批朝代</button>
+      <button class="btn primary large" onclick="enterRoom()">进入对战房间</button>
+    </div>
+  </div>
+</div>
+
+<!-- 游戏区 -->
+<div id="gameWrap" style="display:none">
+  <div class="room-bar">
+    <div class="rb-left">
+      <span class="rb-tag">对战房间</span>
+      <span class="rb-id">#<b id="roomId">—</b></span>
+    </div>
+    <div class="vs">
+      <span class="p me" id="me">—</span>
+      <span class="vs-badge">VS</span>
+      <span class="p opp" id="opponent">—</span>
+    </div>
+    <div class="spacer"></div>
+    <div id="oppStatus" class="opp-status">对手正在准备…</div>
+  </div>
+
+  <div id="waiting" class="waiting">
+    <div class="wait-card">
+      <div class="ring"><span></span></div>
+      <div class="wt">正在匹配对手</div>
+      <div class="wd">对手进入房间后自动开战，同一套牌、同一倒计时。</div>
+      <div class="dot-row"><i></i><i></i><i></i></div>
+    </div>
+  </div>
+
+  <div id="gameInner" style="display:none">
+    <div class="level-band" id="levelBand"></div>
+    <div class="bottombar">
+      <div class="summary" id="summary"></div>
+      <div class="chip timer-chip">计时 <strong id="timerDisplay">03:00</strong></div>
+      <button class="btn ghost" onclick="resetBoard()">清空重排</button>
+      <button class="btn primary" id="submitBtn" onclick="submitAll()" disabled>提交判定</button>
+    </div>
+    <div class="game-stage">
+      <div class="palette" id="palette"></div>
+      <div class="board" id="board"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 结算 Modal -->
+<div class="modal-mask" id="modal">
+  <div class="modal result-modal">
+    <button class="rm-close" onclick="closeModal()" aria-label="关闭">×</button>
+    <div class="result-hero">
+      <div class="rh-confetti"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="rh-kicker" id="modalTitle">恭喜获得</div>
+      <div class="rh-score"><span id="resultScore">0</span><em>分</em></div>
+      <div class="rh-sub" id="modalSum"></div>
+    </div>
+    <div class="result-stats" id="resultStats"></div>
+    <div class="result-detail">
+      <div class="rd-head">
+        <div class="rd-tabs" id="detailTabs">
+          <button class="rd-tab on" data-tab="wrong">错误题 <b id="cntWrong">0</b></button>
+          <button class="rd-tab" data-tab="right">正确题 <b id="cntRight">0</b></button>
+        </div>
+        <div class="rd-hint">每张牌标出你的分组，红色为分错的牌</div>
+      </div>
+      <div class="rd-list" id="detailList"></div>
+    </div>
+    <div class="result-foot">
+      <button class="btn ghost" data-act="new">换参数再来</button>
+      <button class="btn ghost" data-act="same">同参数再来</button>
+      <button class="btn primary" data-act="home">返回中心</button>
+    </div>
+  </div>
+</div>
+
+<script src="shared.js?v=20261111"></script>
+<script src="audio.js?v=20261113"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="data/kb-data.js?v=20261111"></script>
+<script src="data/db.js?v=20261111"></script>
+<script>
+requireLogin();
+document.getElementById("topnav-root").outerHTML = renderTopnav("lobby");
+HNAudio.mountButtons();   // 顶部导航右侧：音乐 / 音效开关
+
+/* ===== 从游戏大厅传入的参数 ===== */
+const QS = new URLSearchParams(location.search);
+const PREF = {
+  level: Math.min(LEVELS.length, Math.max(1, parseInt(QS.get("level"), 10) || 1)),
+  nation: QS.get("country") === "F" ? "F" : "C",
+  era: QS.get("era") || "",
+  timer: ["c","p","n"].indexOf(QS.get("timer")) >= 0 ? QS.get("timer") : "c"
+};
+
+window.addEventListener("hn-db-updated", () => {
+  if(document.getElementById("paramsWrap").style.display !== "none") fillParamControls();
+  maybeAutoStart();
+});
+
+/* 来自大厅（带任一参数）时直接进入对战房间，不再停留在旧的参数配置页 */
+const FROM_LOBBY = ["level","country","era","timer"].some(k => QS.has(k));
+let autoStarted = false;
+function maybeAutoStart(){
+  if(!FROM_LOBBY || autoStarted) return;
+  if(!window.DB || !DB.length) return;
+  if(document.getElementById("paramsWrap").style.display === "none") return;
+  autoStarted = true;
+  enterRoom();
+}
+
+/* ===== 参数控件（与单机相同） ===== */
+function fillParamControls(){
+  const selLv = document.getElementById("paramLevel");
+  selLv.innerHTML = "";
+  LEVELS.forEach((lv,i)=> selLv.innerHTML += `<option value="${i+1}">Lv${i+1} · ${lv.nDim}元 · 每组+${i+1}分</option>`);
+  selLv.value = PREF.level;
+  document.getElementById("paramNation").value = PREF.nation;
+  fillEras();
+  selLv.onchange = fillEras;
+  document.getElementById("paramNation").onchange = ()=>{ PREF.era = ""; fillEras(); };
+  document.querySelectorAll("#paramTimerRow .radio-chip").forEach(c=>{
+    c.onclick = ()=>{
+      document.querySelectorAll("#paramTimerRow .radio-chip").forEach(x=> x.classList.remove("on"));
+      c.classList.add("on");
+      document.getElementById("paramTimer").value = c.dataset.t;
+      updateTimerLabel();
+    };
+  });
+  document.querySelectorAll("#paramTimerRow .radio-chip").forEach(c=>{
+    c.classList.toggle("on", c.dataset.t === PREF.timer);
+  });
+  document.getElementById("paramTimer").value = PREF.timer;
+  updateTimerLabel();
+  updateEraPool();
+}
+function fillEras(){
+  const nation = document.getElementById("paramNation").value;
+  const sel = document.getElementById("paramEra");
+  const want = PREF.era;
+  sel.innerHTML = `<option value="">随机</option>`;
+  erasOf(nation).forEach(e=> sel.innerHTML += `<option value="${e}">${e}</option>`);
+  sel.value = (want && erasOf(nation).indexOf(want) >= 0) ? want : "";
+  updateEraPool();
+}
+function updateEraPool(){
+  const nation = document.getElementById("paramNation").value;
+  const era = document.getElementById("paramEra").value;
+  let pool = DB.filter(p=> p.nation===nation);
+  if(era) pool = pool.filter(p=> p.era===era);
+  const el = document.getElementById("eraPoolSize");
+  if(el) el.textContent = pool.length;
+}
+document.getElementById("paramEra").onchange = updateEraPool;
+function newParam(){ PREF.era = ""; fillEras(); }
+function updateTimerLabel(){
+  const t = document.getElementById("paramTimer").value;
+  document.getElementById("timerDisplay").textContent = t==="c"?"03:00": t==="p"?"00:00":"—";
+}
+fillParamControls();
+setTimeout(maybeAutoStart, 0);
+
+/* ===== 对战房间（模拟） ===== */
+let state = null, timer = null, timerSec = 0;
+const OPPONENTS = ["小明同学","历史课代表","学霸小李","语文课代表","学霸张"];
+
+function enterRoom(){
+  const nation = document.getElementById("paramNation").value;
+  let era = document.getElementById("paramEra").value;
+  if(!era){ const eras = erasOf(nation); era = eras[Math.floor(Math.random()*eras.length)] || ""; }
+  const roomId = "VN" + Math.floor(Math.random()*900000+100000);
+  const opp = OPPONENTS[Math.floor(Math.random()*OPPONENTS.length)];
+  document.getElementById("roomId").textContent = roomId;
+  document.getElementById("opponent").textContent = opp;
+  document.getElementById("me").textContent = getUser().name;
+  document.getElementById("oppStatus").textContent = "对手正在连接…";
+  document.getElementById("paramsWrap").style.display = "none";
+  document.getElementById("gameWrap").style.display = "block";
+  document.getElementById("waiting").style.display = "flex";
+  document.getElementById("gameInner").style.display = "none";
+  document.getElementById("summary").textContent = "";
+  document.getElementById("submitBtn").disabled = true;
+  HNAudio.play();   // 进入房间即用户手势，在这里启动淡入 BGM
+  const rc = document.querySelector(".room-bar");
+  rc.classList.remove("ready"); void rc.offsetWidth;
+  setTimeout(()=>{
+    document.getElementById("oppStatus").innerHTML = "对手已就绪 · 3 秒后开战";
+    document.querySelector(".room-bar").classList.add("ready");
+    setTimeout(()=>{ startGame(opp); }, 3000);
+  }, 2000);
+}
+
+function startGame(opp){
+  const lvIdx = +document.getElementById("paramLevel").value - 1;
+  const nation = document.getElementById("paramNation").value;
+  let era = document.getElementById("paramEra").value;
+  const tMode = document.getElementById("paramTimer").value;
+  if(!era){ const eras = erasOf(nation); era = eras[Math.floor(Math.random()*eras.length)] || ""; }
+  const lv = LEVELS[lvIdx];
+  const { dims, pool } = dealDeck(lv, nation, era);
+  const pickN = Math.min(4, Math.max(3, pool.length));
+  const people = HNDB.pick(pool, pickN, ["name", ...dims]);
+  const cards = []; let id=0;
+  people.forEach((p,pi)=>{
+    cards.push({ id:"C"+(id++), pi, field:"name", val:p.name });
+    dims.forEach(f=>{ const v=p[f]||""; if(v) cards.push({ id:"C"+(id++), pi, field:f, val:v }); });
+  });
+  shuffle(cards);
+  state = {
+    levelIdx:lvIdx, nation, era, tMode, opponent:opp, dims,
+    cap: dims.length + 1, scorePer: dims.length,
+    people, cards, groups:{}, cardOwner:{}, cardAttr:{}, submitted:false,
+    totalScore:0, okCount:0, pickN
+  };
+  cards.forEach(c=>{ state.cardAttr[c.id]={pi:c.pi,field:c.field,val:c.val}; state.cardOwner[c.id]=0; });
+  for(let i=1;i<=people.length;i++) state.groups[i]=[];
+  document.getElementById("oppStatus").textContent = "对战进行中 · 对手正在分组…";
+  document.getElementById("waiting").style.display = "none";
+  const gi = document.getElementById("gameInner");
+  gi.style.display = "block";
+  gi.classList.remove("game-in"); void gi.offsetWidth; gi.classList.add("game-in");
+  renderLevelBand(); renderPalette(); renderBoard(); updateSubmit(); startTimer();
+}
+
+function renderLevelBand(){
+  const band = document.getElementById("levelBand"); band.innerHTML = "";
+  LEVELS.forEach((lv,i)=>{
+    const card = document.createElement("div");
+    card.className = "level-card" + (i===state.levelIdx?" on":"");
+    card.innerHTML = `<div class="lv">Lv${i+1}</div><div class="meta">${lv.task}</div><div class="score">每组 +${i+1} 分</div>`;
+    band.appendChild(card);
+  });
+}
+function startTimer(){
+  clearInterval(timer);
+  const disp = document.getElementById("timerDisplay");
+  disp.parentElement.classList.remove("low");
+  if(state.tMode==="c"){
+    timerSec=180; updateTimerDisplay();
+    timer=setInterval(()=>{
+      timerSec--; updateTimerDisplay();
+      if(timerSec<=30) disp.parentElement.classList.add("low");
+      if(timerSec<=0){ clearInterval(timer); if(!state.submitted) submitAll(); }
+    },1000);
+  }
+  else if(state.tMode==="p"){ timerSec=0; updateTimerDisplay(); timer=setInterval(()=>{timerSec++;updateTimerDisplay();},1000); }
+  else{ disp.textContent="不计时"; }
+}
+function updateTimerDisplay(){ const m=Math.floor(timerSec/60),s=timerSec%60; document.getElementById("timerDisplay").textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`; }
+
+function renderPalette(){
+  const palette = document.getElementById("palette"); palette.innerHTML = `<div class="label">分组颜色</div>`;
+  Object.entries(state.groups).forEach(([k])=>{
+    const idx=+k; const g=document.createElement("div");
+    g.className="group";
+    g.dataset.g=idx;
+    g.innerHTML=`<div class="swatch g${idx}"></div><span>第 ${idx} 组</span><span class="g-count" style="min-width:22px;text-align:center;color:var(--ink-2)"></span>`;
+    palette.appendChild(g);
+  });
+  updatePalette();
+}
+function updatePalette(){
+  const palette=document.getElementById("palette");
+  Object.entries(state.groups).forEach(([k,arr])=>{
+    const el=palette.querySelector('.group[data-g="'+k+'"]');
+    if(!el) return;
+    el.classList.toggle("full", arr.length>=state.cap);
+    const c=el.querySelector(".g-count");
+    if(c) c.textContent=arr.length+"/"+state.cap;
+  });
+}
+function updateSummary(){
+  const total=Object.keys(state.cardOwner).length;
+  const done=Object.values(state.cardOwner).filter(x=>x>0).length;
+  const cur=Object.values(state.groups).findIndex(a=>a.length<state.cap)+1||state.people.length;
+  document.getElementById("summary").innerHTML = `已分 <strong>${done}</strong> / ${total} 张 · 下一组第 <span>${cur}</span> 组 · ${NATION_LABEL[state.nation]} · ${state.era}`;
+}
+function renderBoard(){
+  const board = document.getElementById("board"); board.innerHTML="";
+  state.cardEls={};
+  let idx=0;
+  Object.entries(state.cardAttr).forEach(([cid,attr])=>{
+    const g=state.cardOwner[cid]; const card=document.createElement("div");
+    card.className="card"+(g>0?(" g"+g):"");
+    card.style.setProperty("--i", idx++);
+    card.dataset.cid=cid;
+    card.innerHTML=`<div class="type">${DIM_NAMES[attr.field]}</div><div class="val">${attr.val}</div>`;
+    card.onclick = ()=>onCardClick(cid);
+    state.cardEls[cid]=card;
+    board.appendChild(card);
+  });
+  updateSummary();
+}
+function updateCard(cid){
+  const el=state.cardEls && state.cardEls[cid];
+  if(!el) return;
+  const g=state.cardOwner[cid];
+  el.className="card"+(g>0?(" g"+g):"")+(state.submitted?(isGroupCorrect(g)?" ok":" err"):"");
+}
+function onCardClick(cid){
+  if(state.submitted) return;
+  HNAudio.click();   // 点牌短提示音（内部 60ms 节流，连点不叠音）
+  const cur=state.cardOwner[cid];
+  if(cur>0){ state.groups[cur]=state.groups[cur].filter(x=>x!==cid); state.cardOwner[cid]=0; }
+  else{
+    const cap=state.cap; let target=0;
+    for(let i=1;i<=state.people.length;i++){ if(state.groups[i].length<cap){target=i;break;} }
+    if(target===0){ const b=document.getElementById("board"); b.classList.add("shake"); setTimeout(()=>b.classList.remove("shake"),340); return; }
+    state.groups[target].push(cid); state.cardOwner[cid]=target;
+  }
+  updateCard(cid);
+  updatePalette(); updateSummary(); updateSubmit();
+}
+function resetBoard(){
+  if(state.submitted) return;
+  Object.keys(state.groups).forEach(k=>state.groups[k]=[]);
+  Object.keys(state.cardOwner).forEach(k=>{
+    state.cardOwner[k]=0;
+    if(state.cardEls && state.cardEls[k]) state.cardEls[k].className="card";
+  });
+  updatePalette(); updateSummary(); updateSubmit();
+}
+function updateSubmit(){
+  const total=Object.keys(state.cardOwner).length; const done=Object.values(state.cardOwner).filter(x=>x>0).length;
+  document.getElementById("submitBtn").disabled=(done<total||state.submitted);
+}
+function isGroupCorrect(g){
+  if(!g) return false;
+  const s=new Set(); state.groups[g].forEach(c=>s.add(state.cardAttr[c].pi));
+  return s.size===1;
+}
+
+function submitAll(){
+  state.submitted=true; clearInterval(timer);
+  const lv=LEVELS[state.levelIdx]; let score=0, ok=0; const results=[];
+  state.people.forEach((p,pi)=>{
+    const mine=Object.keys(state.cardAttr).filter(cid=>state.cardAttr[cid].pi===pi);
+    let grp=0; Object.entries(state.groups).forEach(([g,cids])=>{
+      const s=new Set(); cids.forEach(c=>s.add(state.cardAttr[c].pi));
+      // 必须“这一人的全部牌都在同一组、且该组没有别人”才算答对
+      if(cids.length===mine.length && s.size===1 && [...s][0]===pi) grp=+g;
+    });
+    const pass=grp>0; if(pass){score+=state.scorePer;ok++; persistMarkDone(personKey(p.name));}
+    results.push({person:p, ok:pass, group:grp});
+  });
+  persistAddScore(state.levelIdx+1, score);
+  persistAddGame({ date:today(), level:state.levelIdx+1, nation:state.nation, era:state.era, pickN:state.pickN, score, ok, total:results.length, versus:true, opp:state.opponent });
+  const oppOk = Math.max(0, Math.min(results.length, ok + (Math.random()>0.5?Math.floor(Math.random()*2+1): -Math.floor(Math.random()*2+1))));
+  const oppScore = oppOk * state.scorePer;
+  state.totalScore=score; state.okCount=ok; state.oppScore=oppScore; state.oppOk=oppOk;
+  markSubmitted();
+  HNAudio.chime(ok === results.length);   // 全对上行、有误下行
+  showResults(results);
+}
+function markSubmitted(){
+  Object.keys(state.cardOwner).forEach(cid=>{
+    const g=state.cardOwner[cid];
+    const el=state.cardEls && state.cardEls[cid];
+    if(!el) return;
+    el.className="card"+(g>0?(" g"+g):"")+(isGroupCorrect(g)?" ok":" err");
+  });
+  updateSummary();
+}
+/* ===== 结算层：真实作答统计 + 题目详情（保留双方比分） ===== */
+const FIELD_LABEL = { name:"人物", event:"事件", work:"作品", dyn:"朝代", caliber:"字号", identity:"身份" };
+const escHtml = s => String(s==null ? "" : s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function countUp(el, n){
+  if(!el) return;
+  const dur = 640, t0 = performance.now();
+  el.textContent = "0";
+  (function step(){
+    const k = Math.min(1, (performance.now() - t0) / dur);
+    el.textContent = Math.round(n * (1 - Math.pow(1 - k, 3)));
+    if(k < 1) requestAnimationFrame(step);
+  })();
+}
+
+function buildResultRows(results){
+  return results.map(({person, ok}, idx)=>{
+    const pi = state.people.indexOf(person);
+    const mine = Object.keys(state.cardAttr).filter(cid => state.cardAttr[cid].pi === pi);
+    const chips = mine.map(cid=>{
+      const a = state.cardAttr[cid];
+      const g = state.cardOwner[cid] || 0;
+      return { field:a.field, val:a.val, g, good: g > 0 && isGroupCorrect(g) };
+    });
+    let mix = "";
+    if(!ok){
+      const bad = chips.filter(c=> !c.good);
+      const parts = [];
+      const noGroup = bad.filter(c=> !c.g).length;
+      if(noGroup) parts.push(`有 ${noGroup} 张未分组`);
+      const gs = [...new Set(bad.filter(c=> c.g).map(c=> c.g))];
+      gs.forEach(g=>{
+        const others = new Set();
+        state.groups[g].forEach(cid=>{
+          const op = state.cardAttr[cid].pi;
+          if(op !== pi) others.add(state.people[op].name);
+        });
+        if(others.size) parts.push(`组 ${g} 混入了「${[...others].join("、")}」的牌`);
+        else parts.push(`这一人的牌被拆到了组 ${gs.join("、")}`);
+      });
+      mix = parts.join("；");
+    }
+    return { idx, person, ok, chips, mix };
+  });
+}
+
+function renderDetail(tab){
+  if(!state || !state.resultRows) return;
+  state.resultTab = tab;
+  document.querySelectorAll("#detailTabs .rd-tab").forEach(b=> b.classList.toggle("on", b.dataset.tab === tab));
+  const box = document.getElementById("detailList");
+  const rows = state.resultRows.filter(r=> r.ok === (tab === "right"));
+
+  if(!rows.length){
+    const allOk = tab === "wrong";
+    box.innerHTML = `<div class="qd-empty">
+      <div class="qe-ico">${allOk ? "✓" : "—"}</div>
+      <b>${allOk ? "本局全对！" : "本局没有正确题"}</b>
+      <p>${allOk ? "没有错误题，可以去「正确题」看看。" : "全部题目都分错了，去「错误题」看看怎么改。"}</p>
+      <button class="btn ghost small" onclick="switchDetail('${allOk ? "right" : "wrong"}')">查看${allOk ? "正确题" : "错误题"}</button>
+    </div>`;
+    return;
+  }
+
+  box.innerHTML = rows.map(({idx, person, ok, chips, mix})=>{
+    const chipHtml = chips.map(c=>
+      `<span class="qchip ${c.good ? "ok" : "bad"}">${FIELD_LABEL[c.field] || "卡片"} · ${escHtml(c.val)}<b>${c.g ? "组 " + c.g : "未分组"}</b></span>`
+    ).join("");
+    const answer = ok
+      ? `✓ 分组正确：这 ${chips.length} 张牌同属「${escHtml(person.name)}」`
+      : `正确答案：这 ${chips.length} 张牌应同属一组（${escHtml(person.name)}）${mix ? "；" + escHtml(mix) : ""}`;
+    return `<div class="qd-item ${ok ? "ok" : "err"}">
+      <div class="qd-head">
+        <span class="qd-seq">第 ${idx + 1} 题</span>
+        <span class="qd-name">${escHtml(person.name)}</span>
+        <span class="qd-dyn">${escHtml(person.dyn || "")}</span>
+        <span class="qd-flag ${ok ? "ok" : "err"}">${ok ? "✓ 正确" : "✗ 错误"}</span>
+      </div>
+      <div class="qd-chips">${chipHtml}</div>
+      <div class="qd-answer">${answer}</div>
+    </div>`;
+  }).join("");
+}
+
+function switchDetail(tab){ renderDetail(tab); }
+
+function showResults(results){
+  document.getElementById("oppStatus").innerHTML = `对手得分 <strong style="color:var(--ink)">${state.oppScore}</strong> · 正确 ${state.oppOk}/${results.length}`;
+  const total = results.length;
+  const okN = state.okCount;
+  const wrongN = total - okN;
+  const pct = total ? Math.min(100, Math.round(okN * 100 / total)) : 0;
+  const win = state.totalScore > state.oppScore;
+  const resultTxt = win ? "获胜" : state.totalScore === state.oppScore ? "平局" : "惜败";
+
+  state.resultRows = buildResultRows(results);
+
+  document.getElementById("modalTitle").textContent = "恭喜获得";
+  document.getElementById("modalSum").innerHTML =
+    `<b>${resultTxt}</b><span class="vs-sep">·</span>你 <b>${state.totalScore}</b> : <b>${state.oppScore}</b> ${escHtml(state.opponent)}`;
+  countUp(document.getElementById("resultScore"), state.totalScore);
+
+  document.getElementById("resultStats").innerHTML = [
+    ["正确率", pct + "%", pct >= 80 ? "good" : pct >= 50 ? "mid" : "bad"],
+    ["题目数", total, ""],
+    ["答对数", okN, "good"],
+    ["错误数", wrongN, wrongN ? "bad" : ""]
+  ].map(([k,v,t])=> `<div class="rs-item ${t}"><div class="rs-v">${v}</div><div class="rs-k">${k}</div></div>`).join("");
+
+  document.getElementById("cntWrong").textContent = wrongN;
+  document.getElementById("cntRight").textContent = okN;
+  renderDetail("wrong");
+  document.getElementById("modal").classList.add("on");
+  HNAudio.duck();   // 结算弹层出现：音乐压低
+}
+
+document.getElementById("detailTabs").addEventListener("click", function(e){
+  const b = e.target.closest ? e.target.closest(".rd-tab") : null;
+  if(!b || !state || !state.resultRows || b.dataset.tab === state.resultTab) return;
+  renderDetail(b.dataset.tab);
+});
+
+/* 结算里的题目详情卡：点一下也给个轻提示音（详情列表会重建，用事件委托） */
+document.getElementById("detailList").addEventListener("click", function(e){
+  const it = e.target.closest ? e.target.closest(".qd-item") : null;
+  if(it) HNAudio.click(true);
+});
+
+/* 根据本局 state 回填参数控件，保证「同参数再来」参数完全一致 */
+function syncParamsFromState(){
+  if(!state) return;
+  PREF.level = state.levelIdx + 1;
+  PREF.nation = state.nation;
+  PREF.era = state.era;
+  PREF.timer = state.tMode;
+  document.getElementById("paramLevel").value = String(state.levelIdx + 1);
+  document.getElementById("paramNation").value = state.nation;
+  fillEras();
+  document.getElementById("paramEra").value = state.era;
+  document.getElementById("paramTimer").value = state.tMode;
+  document.querySelectorAll("#paramTimerRow .radio-chip").forEach(c=> c.classList.toggle("on", c.dataset.t === state.tMode));
+  updateTimerLabel();
+  updateEraPool();
+}
+
+function replaySame(){
+  if(!state) return;
+  const opp = state.opponent;
+  closeModal();
+  clearInterval(timer);
+  syncParamsFromState();
+  /* 同参数重开：沿用上一局对手，不再走 5 秒匹配动画 */
+  document.getElementById("waiting").style.display = "none";
+  startGame(opp);
+  window.scrollTo({top:0,behavior:"smooth"});
+}
+
+/* 结算底部按钮走事件委托，避免节点重建/内联绑定失效 */
+document.querySelector("#modal .result-foot").addEventListener("click", function(e){
+  const b = e.target.closest ? e.target.closest("button[data-act]") : null;
+  if(!b) return;
+  const act = b.dataset.act;
+  if(act === "same") replaySame();
+  else if(act === "new") location.href = "lobby.html";
+  else if(act === "home") location.href = isGuest() ? "lobby.html" : "home.html";
+});
+
+function closeModal(){ document.getElementById("modal").classList.remove("on"); HNAudio.unduck(); }
+</script>
+
+<style>
+  .setup-head{display:flex;align-items:flex-start;gap:16px}
+  .setup-head .si{
+    width:48px;height:48px;flex:0 0 48px;border-radius:15px;background:linear-gradient(135deg,#2196F3,#4CAF50);
+    color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 18px -8px rgba(33,150,243,.65);
+  }
+  .setup-head .si svg{width:24px;height:24px}
+  .setup-title{font-size:24px}
+  .steps{display:flex;align-items:center;gap:12px;margin:4px 0 24px;padding:12px 16px;border-radius:14px;
+    background:var(--surface-2);border:1px solid var(--line);flex-wrap:wrap}
+  .step{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--ink-2);white-space:nowrap}
+  .step .sn{width:20px;height:20px;border-radius:50%;background:var(--link-bg);color:#1565C0;
+    font-size:11.5px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .step-line{flex:1;min-width:18px;height:1px;background:linear-gradient(90deg,rgba(76,175,80,.35),rgba(33,150,243,.35))}
+
+  .room-bar{
+    position:sticky;top:64px;z-index:20;display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    padding:12px 28px;background:rgba(255,255,255,.92);border-bottom:1px solid var(--line);
+    backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+  }
+  .rb-left{display:flex;align-items:center;gap:10px}
+  .rb-tag{font-size:12px;font-weight:700;color:var(--accent-ink);background:var(--accent-soft);
+    border:1px solid rgba(76,175,80,.3);border-radius:99px;padding:2px 10px}
+  .rb-id{font-size:13px;color:var(--ink-3);font-family:"JetBrains Mono",Menlo,Consolas,monospace}
+  .rb-id b{color:var(--ink);font-weight:700}
+  .vs{display:flex;align-items:center;gap:10px;margin-left:8px}
+  .vs .p{font-size:14.5px;font-weight:700;color:var(--ink);padding:4px 12px;border-radius:99px;background:var(--surface-3);border:1px solid var(--line)}
+  .vs .p.opp{color:#1565C0;background:var(--link-bg);border-color:rgba(33,150,243,.28)}
+  .vs .vs-badge{font-size:11.5px;font-weight:900;letter-spacing:.08em;color:#fff;background:var(--grad);
+    border-radius:99px;padding:3px 9px;box-shadow:0 4px 10px -4px rgba(76,175,80,.7)}
+  .room-bar.ready .vs .p.opp{animation:pulseGlow 1.6s infinite}
+  .opp-status{font-size:13.5px;color:var(--ink-2);display:flex;align-items:center;gap:7px}
+  .opp-status::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--warn);box-shadow:0 0 8px var(--warn);animation:floatY 1.6s infinite}
+
+  .waiting{display:flex;align-items:center;justify-content:center;min-height:calc(100vh - 240px);padding:40px 24px 120px}
+  .wait-card{
+    text-align:center;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-2xl);
+    padding:44px 48px;box-shadow:var(--shadow-lg);max-width:440px;animation:pageIn .5s var(--ease) both;
+  }
+  .wait-card .ring{width:70px;height:70px;margin:0 auto 20px;border-radius:50%;position:relative;
+    background:var(--accent-soft);display:flex;align-items:center;justify-content:center}
+  .wait-card .ring span{width:26px;height:26px;border:3px solid rgba(76,175,80,.25);border-top-color:var(--brand);
+    border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .wait-card .wt{font-size:20px;font-weight:800}
+  .wait-card .wd{font-size:13.5px;color:var(--ink-2);margin-top:8px;line-height:1.7}
+  .dot-row{display:flex;justify-content:center;gap:6px;margin-top:16px}
+  .dot-row i{width:6px;height:6px;border-radius:50%;background:var(--brand);opacity:.35;animation:blink 1.2s infinite}
+  .dot-row i:nth-child(2){animation-delay:.2s}.dot-row i:nth-child(3){animation-delay:.4s}
+  @keyframes blink{0%,100%{opacity:.25}50%{opacity:1}}
+
+  .timer-chip strong{font-size:17px;font-variant-numeric:tabular-nums;color:var(--accent-ink)}
+  .timer-chip.low{border-color:rgba(239,68,68,.4);background:var(--danger-soft);animation:pulseGlow 1.4s infinite}
+  .timer-chip.low strong{color:var(--danger)}
+  .game-in{animation:pageIn .45s var(--ease) both}
+  @media (max-width:760px){
+    .steps{display:none}
+    .vs{order:3;width:100%;margin-left:0}
+    .room-bar{padding:10px 16px;gap:8px}
+    .setup-head .si{width:40px;height:40px;flex:0 0 40px;border-radius:12px}
+    .setup-title{font-size:20px}
+  }
+</style>
+</body>
+</html>

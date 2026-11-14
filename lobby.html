@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>历史关联网 · 游戏大厅</title>
+<link rel="stylesheet" href="shared.css?v=20261111">
+</head>
+<body>
+<div id="topnav-root"></div>
+
+<div class="page">
+  <div class="card lobby-card reveal">
+    <div class="guest-tip" id="guestTip" style="display:none">
+      <b>游客试玩</b>
+      <span>可正常选择参数、开局与结算；成绩、积分与班级排名不会入档。</span>
+      <a href="login.html">登录后可保存成绩</a>
+    </div>
+    <div class="lobby-hero">
+      <h1>选择适合你的难度，开始游戏之旅</h1>
+    </div>
+
+    <div class="lobby-sec">
+      <div class="st">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 2.8 8.4 12 12.8l9.2-4.4z"/><path d="M6 10.4V15c0 1.7 2.7 3 6 3s6-1.3 6-3v-4.6"/></svg>
+        选择级别<span class="hint">每组牌数越多，越考验记忆力</span>
+      </div>
+      <div class="lv-grid" id="lvGrid"></div>
+    </div>
+
+    <div class="lobby-sec">
+      <div class="st">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M3.4 12h17.2"/><path d="M12 3.4c2.4 2.3 3.7 5.4 3.7 8.6s-1.3 6.3-3.7 8.6c-2.4-2.3-3.7-5.4-3.7-8.6S9.6 5.7 12 3.4z"/></svg>
+        选择国家<span class="hint" id="poolHint"></span>
+      </div>
+      <div class="duo-grid" id="nationGrid"></div>
+    </div>
+
+    <div class="lobby-sec">
+      <div class="st">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s6.4-5.3 6.4-10A6.4 6.4 0 0 0 5.6 11c0 4.7 6.4 10 6.4 10z"/><circle cx="12" cy="10.6" r="2.2"/></svg>
+        选择朝代<span class="hint">「随机」= 每次开局抽取</span>
+      </div>
+      <div class="era-grid" id="eraGrid"></div>
+    </div>
+
+    <div class="lobby-sec">
+      <div class="st">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.6" y="7" width="18.8" height="10" rx="4.4"/><path d="M6.6 12h3M8.1 10.5v3"/><circle cx="15.6" cy="10.9" r="1"/><circle cx="17.8" cy="13.1" r="1"/></svg>
+        游戏模式
+      </div>
+      <div class="duo-grid" id="modeGrid"></div>
+    </div>
+
+    <div class="lobby-sec">
+      <div class="st">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12.6" r="7.4"/><path d="M12 8.6v4.4l2.8 1.8"/><path d="M9.4 3.4h5.2"/></svg>
+        计时方式
+      </div>
+      <div class="timer-grid" id="timerGrid"></div>
+    </div>
+
+    <button class="btn primary lobby-start" onclick="startGame()">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8.2 5.4v13.2L18.6 12z"/></svg>
+      开始游戏
+    </button>
+  </div>
+</div>
+
+<script src="accounts.js?v=20261111"></script>
+<script src="shared.js?v=20261111"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="data/kb-data.js?v=20261111"></script>
+<script src="data/db.js?v=20261111"></script>
+<script>
+(function(){
+  var d = requireLogin();
+  if(!d) return;
+  document.getElementById("topnav-root").outerHTML = renderTopnav("lobby");
+  if(isGuest()){
+    var tip = document.getElementById("guestTip");
+    if(tip) tip.style.display = "flex";
+  }
+})();
+
+/* ===== 大厅状态 ===== */
+var S = { level:1, nation:"C", era:"", mode:"single", timer:"c" };
+var LV_DESC = ["适合新手", "经典体验", "挑战自我", "极限挑战", "人神之战"];
+
+/* 模式预选：?mode=versus / ?mode=single；无参数或非法值保持默认单人练习，其它默认值不变 */
+(function(){
+  var m = new URLSearchParams(location.search).get("mode");
+  if(m === "versus" || m === "single") S.mode = m;
+})();
+
+function eraOptions(nation){
+  var list = (window.HNDB && Array.isArray(HNDB.eraOrder)) ? HNDB.eraOrder : ERA_ORDER;
+  var side = list.filter(function(e){
+    return nation === "F" ? e.indexOf("外国") === 0 : e.indexOf("外国") !== 0;
+  });
+  var usable = side.filter(function(e){
+    return DB.filter(function(p){ return p.nation === nation && p.era === e; }).length >= 3;
+  });
+  return usable.length ? usable : erasOf(nation);
+}
+function poolSize(){
+  return DB.filter(function(p){
+    return p.nation === S.nation && (!S.era || p.era === S.era);
+  }).length;
+}
+
+/* ===== 构建各选项组 ===== */
+function buildLevels(){
+  document.getElementById("lvGrid").innerHTML = LEVELS.map(function(lv, i){
+    var cap = lv.nDim, pts = i + 1;
+    return '<div class="opt" data-lv="' + (i+1) + '">' +
+      '<span class="ttl">L' + (i+1) + ' ' + (["简单级","普通级","困难级","专家级","神仙级"][i] || lv.name) + '</span>' +
+      '<span class="num">' + cap + ' 项连接 · 每组 +' + pts + ' 分</span>' +
+      '<span class="ds">' + (LV_DESC[i] || lv.task) + '</span></div>';
+  }).join("");
+  document.querySelectorAll("#lvGrid .opt").forEach(function(el){
+    el.onclick = function(){ S.level = +el.dataset.lv; refresh(); };
+  });
+}
+
+function buildNations(){
+  var meta = [
+    { v:"C", name:"中国", ds:"中华历史人物", ic:'<path d="M4 20h16"/><path d="M6 20V9l6-4 6 4v11"/><path d="M10 20v-5h4v5"/>' },
+    { v:"F", name:"外国", ds:"世界历史人物", ic:'<circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8"/><path d="M12 3.6c2.3 2.3 3.6 5.2 3.6 8.4s-1.3 6.1-3.6 8.4c-2.3-2.3-3.6-5.2-3.6-8.4S9.7 5.9 12 3.6z"/>' }
+  ];
+  document.getElementById("nationGrid").innerHTML = meta.map(function(m){
+    return '<div class="opt big" data-n="' + m.v + '">' +
+      '<div class="bi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + m.ic + '</svg></div>' +
+      '<div class="tx"><span class="ttl">' + m.name + '</span><span class="ds">' + m.ds + '</span></div></div>';
+  }).join("");
+  document.querySelectorAll("#nationGrid .opt").forEach(function(el){
+    el.onclick = function(){
+      if(S.nation === el.dataset.n){ return; }
+      S.nation = el.dataset.n;
+      S.era = "";
+      buildEras();
+      refresh();
+    };
+  });
+}
+
+function buildEras(){
+  var grid = document.getElementById("eraGrid");
+  grid.innerHTML = '<div class="era-chip" data-era="">随机</div>' + eraOptions(S.nation).map(function(e){
+    return '<div class="era-chip" data-era="' + e + '">' + e + '</div>';
+  }).join("");
+  grid.querySelectorAll(".era-chip").forEach(function(el){
+    el.onclick = function(){ S.era = el.dataset.era; refresh(); };
+  });
+}
+
+function buildModes(){
+  document.getElementById("modeGrid").innerHTML =
+    '<div class="opt big" data-m="single">' +
+      '<div class="bi"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8.2 5.4v13.2L18.6 12z"/></svg></div>' +
+      '<div class="tx"><span class="ttl">单人练习</span><span class="ds">独立完成分组，提交后看知识卡</span></div></div>' +
+    '<div class="opt big" data-m="versus">' +
+      '<div class="bi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l6 6M14 14l6 6M4 20l6-6M14 10l6-6"/><path d="M15 4h5v5"/><path d="M4 15v5h5"/></svg></div>' +
+      '<div class="tx"><span class="ttl">同题对战</span><span class="ds">匹配对手，同一套牌比谁判得准</span></div></div>';
+  document.querySelectorAll("#modeGrid .opt").forEach(function(el){
+    el.onclick = function(){ S.mode = el.dataset.m; refresh(); };
+  });
+}
+
+function buildTimers(){
+  var meta = [
+    { v:"c", name:"倒计时", ds:"限时 3 分钟" },
+    { v:"p", name:"正计时", ds:"记录本局用时" },
+    { v:"n", name:"不限时", ds:"慢慢思考" }
+  ];
+  document.getElementById("timerGrid").innerHTML = meta.map(function(m){
+    return '<div class="opt" data-t="' + m.v + '"><span class="ttl">' + m.name + '</span><span class="ds">' + m.ds + '</span></div>';
+  }).join("");
+  document.querySelectorAll("#timerGrid .opt").forEach(function(el){
+    el.onclick = function(){ S.timer = el.dataset.t; refresh(); };
+  });
+}
+
+/* ===== 同步选中态 ===== */
+function refresh(){
+  document.querySelectorAll("#lvGrid .opt").forEach(function(el){ el.classList.toggle("on", +el.dataset.lv === S.level); });
+  document.querySelectorAll("#nationGrid .opt").forEach(function(el){ el.classList.toggle("on", el.dataset.n === S.nation); });
+  document.querySelectorAll("#eraGrid .era-chip").forEach(function(el){ el.classList.toggle("on", el.dataset.era === S.era); });
+  document.querySelectorAll("#modeGrid .opt").forEach(function(el){ el.classList.toggle("on", el.dataset.m === S.mode); });
+  document.querySelectorAll("#timerGrid .opt").forEach(function(el){ el.classList.toggle("on", el.dataset.t === S.timer); });
+  var hint = document.getElementById("poolHint");
+  if(hint) hint.textContent = "当前题库 " + poolSize() + " 条";
+}
+
+/* ===== 开始游戏 ===== */
+function startGame(){
+  var p = new URLSearchParams();
+  p.set("level", S.level);
+  p.set("country", S.nation);
+  if(S.era) p.set("era", S.era);
+  p.set("timer", S.timer);
+  location.href = (S.mode === "versus" ? "play_versus.html" : "play_single.html") + "?" + p.toString();
+}
+
+buildLevels();
+buildNations();
+buildEras();
+buildModes();
+buildTimers();
+refresh();
+
+window.addEventListener("hn-db-updated", function(){
+  buildEras();
+  refresh();
+});
+</script>
+</body>
+</html>

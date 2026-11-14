@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>历史关联网 · 登录</title>
+<link rel="stylesheet" href="shared.css?v=20261111">
+</head>
+<body class="auth-bg">
+<div class="auth-card">
+  <div class="auth-side">
+    <div class="kicker">EDUCATIONAL SERIOUS GAME</div>
+    <div class="title">历史关联网</div>
+
+    <!-- 关系网装饰：时间轴上的连线 -->
+    <div class="auth-art" aria-hidden="true">
+      <svg viewBox="0 0 420 220" fill="none">
+        <defs>
+          <linearGradient id="authLine" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#4CAF50"/><stop offset="1" stop-color="#2196F3"/>
+          </linearGradient>
+        </defs>
+        <path d="M40 150 L120 60 L210 120 L300 50 L380 130" stroke="url(#authLine)" stroke-width="1.6" stroke-dasharray="4 6" opacity=".75"/>
+        <path d="M120 60 L210 120 L300 50" stroke="url(#authLine)" stroke-width="1.2" stroke-dasharray="3 7" opacity=".45"/>
+        <path d="M40 150 L210 120 L380 130" stroke="url(#authLine)" stroke-width="1.2" stroke-dasharray="3 7" opacity=".35"/>
+        <circle cx="40" cy="150" r="7" fill="#12261E" stroke="#4CAF50" stroke-width="2"/>
+        <circle cx="120" cy="60" r="9" fill="#12261E" stroke="#66BB6A" stroke-width="2"/>
+        <circle cx="210" cy="120" r="10" fill="#12261E" stroke="#9BD4FF" stroke-width="2"/>
+        <circle cx="300" cy="50" r="8" fill="#12261E" stroke="#2196F3" stroke-width="2"/>
+        <circle cx="380" cy="130" r="7" fill="#12261E" stroke="#4CAF50" stroke-width="2"/>
+        <circle cx="210" cy="120" r="18" fill="#4CAF50" opacity=".10"/>
+      </svg>
+    </div>
+
+    <div class="hero">
+      这曾是一张完整的关系网，如今牌面被撕散，<br>
+      每一张牌都找不到自己的人。<br><br>
+      玩家把散落的人物、事件、作品、朝代、字号<br>
+      按人物重新归组，逐级加维，<br>
+      最终点亮一张有史料出处的 <b>关系网</b>。
+    </div>
+    <div class="auth-copyright">© 2026 · 历史关联网 · V1.0</div>
+  </div>
+
+  <div class="auth-body">
+    <h2>欢迎回来</h2>
+    <div class="sub">按身份使用账号信息表登录</div>
+
+    <div class="role-tabs">
+      <div class="role-tab on" data-role="s" onclick="pickRole('s')">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H20v3H6.5"/><path d="M9 7h7"/></svg></span>
+        <span class="nm">学生</span>
+        <div class="desc">学号登录 · 练习 / 对战</div>
+      </div>
+      <div class="role-tab" data-role="t" onclick="pickRole('t')">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20V4a2 2 0 0 1 2-2h9l5 5v13z"/><path d="M14 2v6h6"/><path d="M7 13l3 3 5-5"/></svg></span>
+        <span class="nm">老师</span>
+        <div class="desc">工号登录 · 班级学情</div>
+      </div>
+      <div class="role-tab" data-role="a" onclick="pickRole('a')">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="#fff"/><circle cx="15" cy="12" r="2" fill="#fff"/><circle cx="8" cy="18" r="2" fill="#fff"/></svg></span>
+        <span class="nm">管理员</span>
+        <div class="desc">账号登录 · 全局数据</div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label id="idLabel">学号</label>
+      <input id="authId" autocomplete="username" maxlength="30">
+    </div>
+    <div class="field">
+      <label>密码</label>
+      <div class="pw-wrap">
+        <input id="authPw" type="password" autocomplete="current-password" maxlength="30" placeholder="请输入密码">
+        <button class="pw-eye" type="button" id="pwEye" onclick="togglePw()">显示</button>
+      </div>
+    </div>
+
+    <div class="auth-err" id="authErr"></div>
+
+    <div class="auth-actions">
+      <button class="btn primary large" id="loginBtn" onclick="doLogin()">登录</button>
+      <button class="btn ghost large" onclick="doGuest()">试玩</button>
+    </div>
+    <div class="guest-note">试玩无需登录，直接进入游戏大厅；成绩、积分与班级排名不会保存。</div>
+
+    <div class="auth-foot">
+      <div id="accHint"></div>
+      <div style="margin-top:8px;opacity:.75">演示账号 · 账号与成绩仅保存在本机浏览器</div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .auth-art{margin-top:26px;position:relative;z-index:1;opacity:.95}
+  .auth-art svg{width:100%;height:auto;display:block}
+  .auth-art circle{animation:floatY 5s ease-in-out infinite}
+  .auth-art circle:nth-child(6){animation-delay:.4s}
+  .auth-art circle:nth-child(7){animation-delay:.9s}
+  .auth-art circle:nth-child(8){animation-delay:1.3s}
+  .auth-art circle:nth-child(9){animation-delay:1.8s}
+  .auth-art circle:nth-child(10){animation-delay:2.2s}
+  .auth-copyright{margin-top:22px;font-size:12.5px;color:rgba(255,255,255,.42);position:relative;z-index:1}
+  .guest-note{margin-top:10px;text-align:center;font-size:12.5px;line-height:1.6;color:var(--ink-3)}
+  .auth-body .role-tab,.auth-body .field,.auth-body .auth-actions{animation:inUp .5s var(--ease) both}
+  .auth-body .role-tab:nth-child(1){animation-delay:.06s}
+  .auth-body .role-tab:nth-child(2){animation-delay:.12s}
+  .auth-body .role-tab:nth-child(3){animation-delay:.18s}
+  @keyframes inUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+  #loginBtn.loading{pointer-events:none}
+  #loginBtn.loading::after{content:"";width:12px;height:12px;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media (max-width:760px){ .auth-art{display:none} }
+</style>
+
+<script src="accounts.js?v=20261111"></script>
+<script src="shared.js?v=20261111"></script>
+<script>
+let loginPick = "s";
+
+function pickRole(r){
+  loginPick = r;
+  document.querySelectorAll(".role-tab").forEach(t=> t.classList.toggle("on", t.dataset.role===r));
+  const idEl = document.getElementById("authId");
+  document.getElementById("idLabel").textContent = ROLE_FIELD[r];
+  idEl.placeholder = ROLE_PLACEHOLDER[r];
+  idEl.value = "";
+  document.getElementById("authPw").value = "";
+  clearErr();
+  fillHint();
+  idEl.focus();
+}
+
+function fillHint(){
+  const list = allAccounts(loginPick);
+  const key = ROLE_FIELD[loginPick];
+  const lines = list.slice(0,3).map(a=> `${key} <b>${a.id}</b> · 密码 <b>${effectivePw(loginPick, a.id, a.pw)}</b>`).join("<br>");
+  document.getElementById("accHint").innerHTML =
+    `演示账号（${list.length} 个）<br>${lines || "暂无账号"}`;
+}
+
+function setErr(msg){
+  const el = document.getElementById("authErr");
+  el.textContent = msg || "";
+  el.classList.remove("on");
+  if(msg){ void el.offsetWidth; el.classList.add("on"); }
+}
+function clearErr(){ setErr(""); }
+
+function togglePw(){
+  const pw = document.getElementById("authPw");
+  const eye = document.getElementById("pwEye");
+  const show = pw.type === "password";
+  pw.type = show ? "text" : "password";
+  eye.textContent = show ? "隐藏" : "显示";
+}
+
+function doLogin(){
+  const key = ROLE_FIELD[loginPick];
+  const idVal = document.getElementById("authId").value.trim();
+  const pwVal = document.getElementById("authPw").value;
+  if(!idVal){ setErr(`请输入${key}`); return; }
+  if(!pwVal){ setErr("请输入密码"); return; }
+
+  const list = allAccounts(loginPick);
+  const acc = list.find(a=> a.id.toLowerCase() === idVal.toLowerCase());
+  if(!acc){ setErr(`${key}不存在，请核对账号信息表`); return; }
+  if(effectivePw(loginPick, acc.id, acc.pw) !== pwVal){ setErr("密码不正确"); return; }
+
+  const btn = document.getElementById("loginBtn");
+  btn.classList.add("loading"); btn.textContent = "正在进入";
+
+  const d = loadAll();
+  d.user = { role:loginPick, name:acc.name, no:acc.id, cls:acc.cls||"", group:acc.group, avatar:acc.avatar||"", loginAt:Date.now() };
+  d.profiles = d.profiles || {};
+  d.profiles[loginPick+"|"+acc.id] = d.profiles[loginPick+"|"+acc.id] || { totalScore:0, bestLevel:1, done:{} };
+  saveAll(d);
+  setTimeout(()=>{ location.href = (loginPick==="t"||loginPick==="a") ? "home.html" : "home_student.html"; }, 260);
+}
+
+function doGuest(){
+  saveAll({ ...(loadAll()||{}), user:{ role:"g", name:"游客", no:"", cls:"" } });
+  location.href = "lobby.html";
+}
+
+document.getElementById("authId").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
+document.getElementById("authPw").addEventListener("keydown", e=>{ if(e.key==="Enter") doLogin(); });
+
+// 已登录（非游客）直接进对应角色的个人中心；游客停在登录页以便切换账号
+const curUser = getUser();
+if(curUser && (curUser.role==="t"||curUser.role==="a")){ location.href = "home.html"; }
+else if(curUser && curUser.role==="s"){ location.href = "home_student.html"; }
+else { pickRole("s"); }
+</script>
+</body>
+</html>

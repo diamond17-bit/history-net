@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>历史关联网 · 成绩分析</title>
+<link rel="stylesheet" href="shared.css?v=20261111">
+</head>
+<body>
+<div id="topnav-root"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <h1 class="page-title">成绩分析</h1>
+      <div class="page-sub">按班级与朝代汇总练习成绩，查看对局趋势、正确率与学习分布。</div>
+    </div>
+  </div>
+
+  <!-- 分析维度条常驻：不随下方内容重绘，切换维度后始终可见 -->
+  <div class="card reveal" id="saDimBar" style="margin-bottom:20px">
+    <div class="toolbar">
+      <span style="font-size:12.5px;color:var(--ink-3);font-weight:700;margin-right:2px">分析维度</span>
+      <div class="dim-tabs">
+        <button class="dim-tab on" data-dim="cls">班级</button>
+        <button class="dim-tab" data-dim="era">朝代</button>
+      </div>
+      <select class="tb-select" id="saCls"></select>
+      <select class="tb-select" id="saRange">
+        <option value="30">最近 1 个月</option>
+        <option value="90">最近 3 个月</option>
+        <option value="0">全部时间</option>
+      </select>
+      <div class="grow"></div>
+      <button class="btn ghost" onclick="exportCSV()">导出汇总</button>
+    </div>
+  </div>
+
+  <div id="saRoot"></div>
+</div>
+
+<script src="accounts.js?v=20261111"></script>
+<script src="shared.js?v=20261111"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="data/kb-data.js?v=20261111"></script>
+<script src="data/db.js?v=20261111"></script>
+<script>
+(function(){
+  var d = requireAccount();
+  if(!d) return;
+  var u = d.user || {};
+  if(u.role === "s"){ location.replace("home_student.html"); return; }
+  document.getElementById("topnav-root").outerHTML = renderTopnav("chart");
+})();
+
+var LS_GAMES_KEY = "history_net_games_v1";
+var state = { cls: "all", dim: "cls", range: "90" };
+
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+    return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c];
+  });
+}
+function p2(n){ return String(n).padStart(2, "0"); }
+function ds(d){ return d.getFullYear() + "-" + p2(d.getMonth()+1) + "-" + p2(d.getDate()); }
+function todayStr(){ return ds(new Date()); }
+function dateOffset(n){ var d = new Date(); d.setDate(d.getDate() - n); return ds(d); }
+function inRange(date){
+  if(state.range === "0") return true;
+  if(!date) return false;
+  return date >= dateOffset(+state.range - 1);
+}
+function loadGames(){
+  try{ return JSON.parse(localStorage.getItem(LS_GAMES_KEY)) || []; }catch(e){ return []; }
+}
+function allStudentGames(){
+  return loadGames().filter(function(g){ return g && g.role === "s" && typeof g.who === "string" && g.who.indexOf("s|") === 0; })
+    .map(function(g){
+      var iso = (typeof dateISO === "function") ? dateISO(g.date) : "";
+      return Object.assign({}, g, { date: iso || "" });
+    });
+}
+
+/* ---- 范围学生（与「学生管理」同口径） ---- */
+function scopeRows(){
+  var classes = loadClasses();
+  var scores = loadScores();
+  var nos = [];
+  if(state.cls === "all"){
+    var seen = {};
+    classes.forEach(function(c){ c.members.forEach(function(no){ if(!seen[no]){ seen[no]=1; nos.push(no); } }); });
+  } else {
+    var cls = classes.filter(function(c){ return String(c.id) === state.cls; })[0];
+    if(cls) nos = cls.members.slice();
+  }
+  return nos.map(function(no){
+    var acc = findStudent(no) || { name:"?", cls:"" };
+    var s = scores[no] || {};
+    return {
+      no: no, name: acc.name,
+      cls: classes.filter(function(c){ return c.members.indexOf(no) >= 0; }).map(function(c){ return c.name; }).join("、") || acc.cls || "—",
+      best: s.bestLevel || 1, score: s.score || 0, done: s.doneCount || 0, last: s.lastDate || "—"
+    };
+  });
+}
+function isPracticed(r){ return r.score > 0 || r.done > 0 || r.last !== "—"; }
+function scopedGames(rows){
+  var set = new Set(rows.map(function(r){ return r.no; }));
+  return allStudentGames().filter(function(g){ return set.has(g.who.slice(2)) && inRange(g.date); });
+}
+/* 上一周期（等长的前一区间）用于趋势对比 */
+function prevGames(rows){
+  var total = state.range === "0" ? 90 : +state.range;
+  var from = dateOffset(total * 2 - 1), to = dateOffset(total);
+  var set = new Set(rows.map(function(r){ return r.no; }));
+  return allStudentGames().filter(function(g){
+    return set.has(g.who.slice(2)) && g.date && g.date >= from && g.date <= to;
+  });
+}
+function eraKey(g){ return (g.era && g.era !== "all") ? g.era : "未标注"; }
+function gameAvgScore(games){
+  if(!games.length) return 0;
+  return Math.round(games.reduce(function(s,g){ return s + (g.score || 0); }, 0) / games.length);
+}
+function gameAccuracy(games){
+  var ok = 0, total = 0;
+  games.forEach(function(g){ ok += g.ok || 0; total += g.total || 0; });
+  return total ? Math.round(ok / total * 100) : null;
+}
+var ERA_SHORT = { "三国两晋南北朝":"三国两晋" };
+function shortEra(e){ return ERA_SHORT[e] || e; }
+function eraOrderList(){
+  var src = (window.HNDB && Array.isArray(HNDB.eraOrder)) ? HNDB.eraOrder : (typeof ERA_ORDER !== "undefined" ? ERA_ORDER : []);
+  return src.slice();
+}
+function emptyBox(title, need){
+  return '<div class="roster-empty"><b>' + title + '</b>' + need + '</div>';
+}
+
+/* ================= 页面骨架 ================= */
+var firstRender = true;
+
+/* 维度条是常驻节点（#saDimBar）：这里只同步选中态与下拉值，不重建 DOM */
+function renderDimBar(classes){
+  document.querySelectorAll("#saDimBar .dim-tab").forEach(function(b){
+    b.classList.toggle("on", b.dataset.dim === state.dim);
+    if(!b._bound){
+      b._bound = true;
+      b.addEventListener("click", function(){
+        if(state.dim === b.dataset.dim) return;
+        state.dim = b.dataset.dim;
+        renderAll();
+      });
+    }
+  });
+
+  if(state.cls !== "all" && !classes.some(function(c){ return String(c.id) === state.cls; })) state.cls = "all";
+  var sel = document.getElementById("saCls");
+  if(!sel._bound){
+    sel._bound = true;
+    sel.addEventListener("change", function(){ state.cls = this.value; renderAll(); });
+  }
+  sel.innerHTML = '<option value="all">所有班级</option>' + classes.map(function(c){
+    return '<option value="' + c.id + '">' + esc(c.name) + '</option>';
+  }).join("");
+  sel.value = state.cls;
+
+  var rsel = document.getElementById("saRange");
+  if(!rsel._bound){
+    rsel._bound = true;
+    rsel.addEventListener("change", function(){ state.range = this.value; renderAll(); });
+  }
+  rsel.value = state.range;
+}
+
+function renderAll(){
+  var classes = loadClasses();
+  var root = document.getElementById("saRoot");
+  var bar = document.getElementById("saDimBar");
+
+  if(!classes.length){
+    bar.style.display = "none";
+    root.innerHTML =
+      '<div class="card reveal"><div class="roster-empty"><b>还没有班级</b>' +
+      '成绩分析依赖班级学生与练习记录。请先到「创建班级」建一个班，并把学生加入名单。<br>' +
+      '<a class="btn primary" style="margin-top:16px" href="class_create.html">去创建班级</a></div></div>';
+    if(typeof revealIn === "function") revealIn(root);
+    return;
+  }
+  bar.style.display = "";
+  renderDimBar(classes);
+
+  root.innerHTML =
+    '<div class="sa-stats" id="saStats"></div>' +
+    '<div class="sa-grid2">' +
+      '<div class="card reveal" style="--i:1"><div class="section-title">成绩趋势</div><div id="saTrend"></div></div>' +
+      '<div class="card reveal" style="--i:2"><div class="section-title" id="saCmpTitle">朝代对比</div><div id="saRadar"></div></div>' +
+    '</div>' +
+    '<div class="card reveal" style="--i:3;margin-bottom:20px">' +
+      '<div class="section-title" id="saTableTitle">朝代明细</div><div id="saTable"></div>' +
+    '</div>' +
+    '<div class="sa-grid2">' +
+      '<div class="card reveal" style="--i:4"><div class="section-title">关卡正确率</div><div id="saLevelAcc"></div></div>' +
+      '<div class="card reveal" style="--i:5"><div class="section-title">积分分布</div><div id="saDist"></div></div>' +
+    '</div>' +
+    '<div class="sa-grid2">' +
+      '<div class="card reveal" style="--i:6"><div class="section-title">需关注学生</div><div id="saWatch"></div></div>' +
+      '<div class="card reveal" style="--i:7"><div class="section-title">积分排行榜 · Top 10</div><div id="saTop"></div></div>' +
+    '</div>';
+
+  renderStats();
+  renderTrend();
+  renderRadar();
+  renderTable();
+  renderLevelAcc();
+  renderDist();
+  renderWatch();
+  renderTop();
+
+  // 首次渲染走入场上浮；切换维度等重绘时直接显示，避免闪烁/整页"像刷新"
+  if(firstRender){
+    firstRender = false;
+    if(typeof revealIn === "function") revealIn(root);
+  } else {
+    root.querySelectorAll(".reveal").forEach(function(el){ el.classList.add("in"); });
+  }
+}
+
+/* ---- 概览指标卡 ---- */
+function renderStats(){
+  var rows = scopeRows();
+  var games = scopedGames(rows);
+  var n = rows.length;
+  var practiced = rows.filter(isPracticed).length;
+  var avgScore = n ? Math.round(rows.reduce(function(s,r){ return s + r.score; }, 0) / n) : 0;
+  var acc = gameAccuracy(games);
+  document.getElementById("saStats").innerHTML =
+    '<div class="sa-stat"><div class="v">' + n + '<em> 人</em></div><div class="l">学生总数</div></div>' +
+    '<div class="sa-stat"><div class="v">' + practiced + '<em> / ' + n + ' 人</em></div><div class="l">已开始练习</div></div>' +
+    '<div class="sa-stat"><div class="v">' + avgScore + '<em> 分</em></div><div class="l">平均累计积分</div></div>' +
+    '<div class="sa-stat"><div class="v">' + games.length + '<em> 局</em></div><div class="l">对局总数（当前时间范围）</div></div>' +
+    '<div class="sa-stat"><div class="v">' + (acc == null ? "—" : acc + '<em> %</em>') + '</div><div class="l">平均答题正确率</div></div>';
+}
+
+/* ---- 成绩趋势（按时间分 8 段，两条折线） ---- */
+function trendBuckets(games){
+  var total;
+  if(state.range === "0"){
+    var dates = games.map(function(g){ return g.date; }).filter(Boolean).sort();
+    if(dates.length){
+      var a = new Date(dates[0] + "T00:00:00");
+      total = Math.max(1, Math.round((new Date() - a) / 86400000));
+    } else total = 1;
+  } else {
+    total = +state.range;
+  }
+  var N = 8, step = Math.max(1, Math.ceil(total / N)), out = [];
+  for(var i = N - 1; i >= 0; i--){
+    out.push({
+      from: dateOffset((i + 1) * step - 1),
+      to: dateOffset(i * step),
+      label: dateOffset(i * step).slice(5).replace("-", "/")
+    });
+  }
+  return out;
+}
+function bucketAvg(games, b){
+  var arr = games.filter(function(g){ return g.date && g.date >= b.from && g.date <= b.to; });
+  return { avg: gameAvgScore(arr), n: arr.length };
+}
+function renderTrend(){
+  var rows = scopeRows();
+  var mine = scopedGames(rows);
+  var all = prevGames(rows);
+  var el = document.getElementById("saTrend");
+  if(!mine.length){
+    el.innerHTML = emptyBox("暂无练习记录", "该时间范围内还没有学生完成练习。需要学生账号完成至少一局「单机练习」或「同题对战」，记录会写入对局存档。");
+    return;
+  }
+  var buckets = trendBuckets(mine);
+  var a = buckets.map(function(b){ return bucketAvg(mine, b); });
+  var c = state.range === "0" ? null : buckets.map(function(b){ return bucketAvg(all, b); });
+  if(c && !c.some(function(p){ return p.n > 0; })) c = null;
+  var maxV = Math.max.apply(null, a.concat(c || []).map(function(x){ return x.avg; }).concat([10]));
+  var max = Math.ceil(maxV / 10) * 10;
+
+  var W = 640, H = 250, pl = 44, pr = 16, pt = 16, pb = 32;
+  var n = buckets.length;
+  var x = function(i){ return pl + i * (W - pl - pr) / (n - 1); };
+  var y = function(v){ return H - pb - (v / max) * (H - pt - pb); };
+  var segs = function(arr, cls){
+    var out = [], cur = [];
+    arr.forEach(function(p, i){
+      if(p.n > 0){ cur.push(x(i).toFixed(1) + "," + y(p.avg).toFixed(1)); }
+      else if(cur.length){ out.push(cur); cur = []; }
+    });
+    if(cur.length) out.push(cur);
+    return out.map(function(s){
+      return '<polyline class="' + cls + '" points="' + s.join(" ") + '"></polyline>';
+    }).join("");
+  };
+  var dots = function(arr, cls){
+    return arr.map(function(p, i){
+      return p.n ? '<circle class="' + cls + '" cx="' + x(i).toFixed(1) + '" cy="' + y(p.avg).toFixed(1) + '" r="3"></circle>' : "";
+    }).join("");
+  };
+  var grid = "";
+  for(var k = 0; k <= 4; k++){
+    var v = max * k / 4, yy = y(v);
+    grid += '<line class="grid" x1="' + pl + '" y1="' + yy.toFixed(1) + '" x2="' + (W - pr) + '" y2="' + yy.toFixed(1) + '"></line>' +
+      '<text class="axis-t" x="' + (pl - 8) + '" y="' + (yy + 3.5).toFixed(1) + '" text-anchor="end">' + Math.round(v) + '</text>';
+  }
+  el.innerHTML =
+    '<svg class="sa-line" viewBox="0 0 ' + W + ' ' + H + '" style="max-height:250px">' +
+      grid + (c ? segs(c, "b") : "") + segs(a, "a") + (c ? dots(c, "db") : "") + dots(a, "da") +
+      buckets.map(function(b, i){
+        return '<text class="axis-t" x="' + x(i).toFixed(1) + '" y="' + (H - 10) + '" text-anchor="middle">' + b.label + '</text>';
+      }).join("") +
+    '</svg>' +
+    '<div class="sa-legend"><span><i class="sw" style="background:#2196F3"></i>' +
+      (state.cls === "all" ? "全部班级平均每局得分" : "当前班级平均每局得分") + '</span>' +
+      (c ? '<span><i class="sw" style="background:#9FB4C6"></i>上一周期平均每局得分</span>' : "") + '</div>' +
+    (allStudentGames().length >= 50 ? '<div class="sa-legend" style="margin-top:4px">练习记录仅保留最近 50 条，趋势为近似值</div>' : "");
+}
+
+/* ---- 分布对比（雷达图） ---- */
+function radarGroups(){
+  var rows = scopeRows();
+  var games = scopedGames(rows);
+  if(state.dim === "era"){
+    var map = {};
+    games.forEach(function(g){
+      var k = eraKey(g);
+      (map[k] = map[k] || []).push(g);
+    });
+    var order = eraOrderList();
+    var list = Object.keys(map).sort(function(a, b){
+      var ia = order.indexOf(a), ib = order.indexOf(b);
+      if(ia < 0) ia = 999;
+      if(ib < 0) ib = 999;
+      return ia - ib;
+    }).map(function(k){
+      return { name: k, value: gameAvgScore(map[k]), n: map[k].length };
+    });
+    return { unit: "平均每局得分", list: list };
+  }
+  var classes = loadClasses().filter(function(c){ return state.cls === "all" || String(c.id) === state.cls; });
+  var scores = loadScores();
+  var list = classes.map(function(c){
+    var arr = c.members.map(function(no){ return (scores[no] || {}).score || 0; });
+    return {
+      name: c.name,
+      value: arr.length ? Math.round(arr.reduce(function(s,v){ return s + v; }, 0) / arr.length) : 0,
+      n: c.members.length
+    };
+  }).filter(function(x){ return x.n > 0; });
+  return { unit: "平均累计积分", list: list };
+}
+function renderRadar(){
+  var g = radarGroups();
+  document.getElementById("saCmpTitle").textContent = state.dim === "era" ? "朝代对比" : "班级对比";
+  var el = document.getElementById("saRadar");
+  var list = g.list;
+  if(list.length < 3){
+    el.innerHTML = emptyBox("数据不足", "至少需要 3 个" + (state.dim === "era" ? "朝代" : "班级") +
+      "有练习记录才能绘制对比雷达图。当前只有 " + list.length + " 个可统计维度。");
+    return;
+  }
+  list = list.sort(function(a, b){ return b.value - a.value; }).slice(0, 8);
+  var W = 430, H = 340, cx = 215, cy = 178, R = 110;
+  var max = Math.max.apply(null, list.map(function(d){ return d.value; }).concat([1]));
+  var n = list.length;
+  var ang = function(i){ return -Math.PI / 2 + i * 2 * Math.PI / n; };
+  var pt = function(i, r){ return [cx + Math.cos(ang(i)) * r, cy + Math.sin(ang(i)) * r]; };
+  var rings = "";
+  for(var k = 1; k <= 4; k++){
+    var r = R * k / 4;
+    rings += '<polygon class="ring" points="' +
+      list.map(function(_, i){ var p = pt(i, r); return p[0].toFixed(1) + "," + p[1].toFixed(1); }).join(" ") + '"></polygon>';
+  }
+  var axes = list.map(function(d, i){
+    var p = pt(i, R);
+    return '<line class="axis" x1="' + cx + '" y1="' + cy + '" x2="' + p[0].toFixed(1) + '" y2="' + p[1].toFixed(1) + '"></line>';
+  }).join("");
+  var shape = '<polygon class="shape" points="' + list.map(function(d, i){
+    var p = pt(i, R * (d.value / max));
+    return p[0].toFixed(1) + "," + p[1].toFixed(1);
+  }).join(" ") + '"></polygon>';
+  var labels = list.map(function(d, i){
+    var p = pt(i, R + 20);
+    var anchor = Math.abs(p[0] - cx) < 6 ? "middle" : (p[0] > cx ? "start" : "end");
+    return '<text x="' + p[0].toFixed(1) + '" y="' + p[1].toFixed(1) + '" text-anchor="' + anchor + '">' +
+      '<title>' + esc(d.name) + '：' + d.value + '</title>' + esc(shortEra(d.name)) + " " + d.value + '</text>';
+  }).join("");
+  el.innerHTML = '<svg class="sa-radar" viewBox="0 0 ' + W + ' ' + H + '">' +
+    rings + axes + shape + labels + '</svg>' +
+    '<div class="sa-legend" style="justify-content:center"><span><i class="sw" style="background:#2196F3"></i>' + g.unit + '（相对最大值）</span></div>';
+}
+
+/* ---- 明细表 ---- */
+function renderTable(){
+  var el = document.getElementById("saTable");
+  document.getElementById("saTableTitle").textContent = state.dim === "era" ? "朝代明细" : "班级明细";
+  if(state.dim === "era"){
+    var rows = scopeRows();
+    var games = scopedGames(rows);
+    if(!games.length){
+      el.innerHTML = emptyBox("暂无记录", "当前时间范围内没有对局记录。朝代维度需要学生完成练习（记录含朝代、得分与答题数）后才能统计。");
+      return;
+    }
+    var map = {};
+    games.forEach(function(g){
+      var k = eraKey(g);
+      var m = map[k] = map[k] || { games: 0, score: 0, ok: 0, total: 0, people: new Set() };
+      m.games++; m.score += g.score || 0; m.ok += g.ok || 0; m.total += g.total || 0;
+      m.people.add(g.who.slice(2));
+    });
+    var order = eraOrderList();
+    var keys = Object.keys(map).sort(function(a, b){
+      var ia = order.indexOf(a), ib = order.indexOf(b);
+      if(ia < 0) ia = 999; if(ib < 0) ib = 999;
+      return ia - ib;
+    });
+    var overall = gameAvgScore(games);
+    el.innerHTML = '<div class="tbl-wrap"><table class="tbl pro" style="min-width:680px">' +
+      '<thead><tr><th>朝代</th><th class="num">参与人数</th><th class="num">对局数</th><th class="num">平均每局得分</th><th class="num">正确率</th><th>相对整体</th></tr></thead><tbody>' +
+      keys.map(function(k){
+        var m = map[k];
+        var avg = Math.round(m.score / m.games);
+        var acc = m.total ? Math.round(m.ok / m.total * 100) + "%" : "—";
+        var d = avg - overall;
+        var trend = d >= 5 ? '<span class="trend up">↑ 高于均值</span>' : (d <= -5 ? '<span class="trend down">↓ 低于均值</span>' : '<span class="trend flat">→ 持平</span>');
+        return '<tr><td><b>' + esc(k) + '</b></td><td class="num">' + m.people.size + '</td><td class="num">' + m.games + '</td>' +
+          '<td class="num sc">' + avg + '</td><td class="num">' + acc + '</td><td>' + trend + '</td></tr>';
+      }).join("") + '</tbody></table></div>';
+    return;
+  }
+
+  var classes = loadClasses().filter(function(c){ return state.cls === "all" || String(c.id) === state.cls; });
+  var scores = loadScores();
+  var gamesAll = scopedGames(scopeRows());
+  if(!classes.length){
+    el.innerHTML = emptyBox("暂无班级", "当前没有可统计的班级。");
+    return;
+  }
+  var overallAvg = (function(){
+    var all = scopeRows();
+    return all.length ? Math.round(all.reduce(function(s,r){ return s + r.score; }, 0) / all.length) : 0;
+  })();
+  el.innerHTML = '<div class="tbl-wrap"><table class="tbl pro" style="min-width:680px">' +
+    '<thead><tr><th>班级</th><th class="num">人数</th><th class="num">对局数</th><th class="num">平均累计积分</th><th class="num">平均掌握率</th><th>相对整体</th></tr></thead><tbody>' +
+    classes.map(function(c){
+      var arr = c.members.map(function(no){ return scores[no] || {}; });
+      var n = arr.length;
+      var avg = n ? Math.round(arr.reduce(function(s,x){ return s + (x.score || 0); }, 0) / n) : 0;
+      var rate = (n && DB.length) ? Math.round(arr.reduce(function(s,x){ return s + (x.doneCount || 0) / DB.length; }, 0) / n * 100) + "%" : "—";
+      var gcount = gamesAll.filter(function(g){ return c.members.indexOf(g.who.slice(2)) >= 0; }).length;
+      var d = avg - overallAvg;
+      var trend = d >= 5 ? '<span class="trend up">↑ 高于均值</span>' : (d <= -5 ? '<span class="trend down">↓ 低于均值</span>' : '<span class="trend flat">→ 持平</span>');
+      return '<tr><td><b>' + esc(c.name) + '</b></td><td class="num">' + n + '</td><td class="num">' + gcount + '</td>' +
+        '<td class="num sc">' + avg + '</td><td class="num">' + rate + '</td><td>' + trend + '</td></tr>';
+    }).join("") + '</tbody></table></div>';
+}
+
+/* ---- 关卡正确率 ---- */
+function renderLevelAcc(){
+  var rows = scopeRows();
+  var games = scopedGames(rows);
+  var el = document.getElementById("saLevelAcc");
+  var byLv = {};
+  games.forEach(function(g){
+    var lv = g.level || 1;
+    byLv[lv] = byLv[lv] || { ok: 0, total: 0 };
+    byLv[lv].ok += g.ok || 0;
+    byLv[lv].total += g.total || 0;
+  });
+  var lvs = Object.keys(byLv).filter(function(k){ return byLv[k].total > 0; }).sort(function(a,b){ return a - b; });
+  if(!lvs.length){
+    el.innerHTML = emptyBox("暂无练习记录", "学生完成练习后，这里会显示 L1–L5 各关卡的正确率。");
+    return;
+  }
+  el.innerHTML = lvs.map(function(k){
+    var d = byLv[k];
+    var acc = Math.round(d.ok / d.total * 100);
+    return '<div class="sa-bar-row">' +
+      '<div class="nm">L' + k + '</div>' +
+      '<div class="tr"><div class="fl" style="width:' + acc + '%"></div></div>' +
+      '<div class="vl">' + acc + '%（' + d.ok + '/' + d.total + '）</div>' +
+    '</div>';
+  }).join("") + '<div class="sa-legend" style="margin-top:8px"><span><span class="dot"></span>答对数 / 作答总数</span></div>';
+}
+
+/* ---- 积分分布 ---- */
+function renderDist(){
+  var rows = scopeRows();
+  var el = document.getElementById("saDist");
+  if(!rows.length){
+    el.innerHTML = emptyBox("暂无学生", "当前范围内没有学生。");
+    return;
+  }
+  var buckets = [
+    { name: "0 分（未练习）", test: function(s){ return s === 0; } },
+    { name: "1 – 199 分", test: function(s){ return s >= 1 && s < 200; } },
+    { name: "200 – 399 分", test: function(s){ return s >= 200 && s < 400; } },
+    { name: "400 分以上", test: function(s){ return s >= 400; } }
+  ];
+  var counts = buckets.map(function(b){ return rows.filter(function(r){ return b.test(r.score); }).length; });
+  var maxC = Math.max.apply(null, counts.concat([1]));
+  el.innerHTML = buckets.map(function(b, i){
+    return '<div class="sa-bar-row">' +
+      '<div class="nm">' + b.name + '</div>' +
+      '<div class="tr"><div class="fl" style="width:' + Math.round(counts[i] / maxC * 100) + '%"></div></div>' +
+      '<div class="vl">' + counts[i] + ' 人</div>' +
+    '</div>';
+  }).join("");
+}
+
+/* ---- 需关注学生 ---- */
+function renderWatch(){
+  var rows = scopeRows();
+  var el = document.getElementById("saWatch");
+  var idle = rows.filter(function(r){ return !isPracticed(r); });
+  if(!rows.length){
+    el.innerHTML = emptyBox("暂无学生", "当前范围内没有学生。");
+    return;
+  }
+  if(!idle.length){
+    el.innerHTML = emptyBox("全员均已开始练习", "当前范围内没有未练习的学生。");
+    return;
+  }
+  el.innerHTML =
+    '<div style="font-size:13px;color:var(--ink-3);margin-bottom:10px">以下 ' + idle.length + ' 名学生还没有任何练习记录：</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:8px">' +
+    idle.map(function(r){
+      return '<span class="chip">' + esc(r.name) + '<strong style="margin-left:6px">' + esc(r.no) + '</strong></span>';
+    }).join("") + '</div>';
+}
+
+/* ---- 排行榜 ---- */
+function renderTop(){
+  var rows = scopeRows().sort(function(a,b){ return b.score - a.score || b.done - a.done; }).slice(0, 10);
+  var el = document.getElementById("saTop");
+  if(!rows.length){
+    el.innerHTML = emptyBox("暂无学生", "当前范围内没有学生。");
+    return;
+  }
+  el.innerHTML =
+    '<div class="tbl-wrap"><table class="tbl pro" style="min-width:520px">' +
+    '<thead><tr><th>排名</th><th>姓名</th><th class="num">积分</th><th class="num">掌握人物</th><th>最近学习</th></tr></thead><tbody>' +
+    rows.map(function(r, i){
+      return '<tr><td class="rank">' + (i + 1) + '</td>' +
+        '<td><b>' + esc(r.name) + '</b> <span style="color:var(--ink-3);font-size:12.5px">' + esc(r.no) + '</span></td>' +
+        '<td class="num sc">' + r.score + '</td>' +
+        '<td class="num">' + r.done + '/' + (DB.length || "—") + '</td>' +
+        '<td>' + esc(r.last) + '</td></tr>';
+    }).join("") + '</tbody></table></div>';
+}
+
+/* ---- 导出当前维度的明细 ---- */
+function exportCSV(){
+  var classes = loadClasses();
+  if(!classes.length){ alert("还没有班级，暂无数据可导出。"); return; }
+  var lines = [];
+  if(state.dim === "era"){
+    var games = scopedGames(scopeRows());
+    if(!games.length){ alert("当前时间范围内没有可导出的对局记录。"); return; }
+    var map = {};
+    games.forEach(function(g){
+      var k = eraKey(g);
+      var m = map[k] = map[k] || { games: 0, score: 0, ok: 0, total: 0, people: new Set() };
+      m.games++; m.score += g.score || 0; m.ok += g.ok || 0; m.total += g.total || 0;
+      m.people.add(g.who.slice(2));
+    });
+    lines.push(["朝代","参与人数","对局数","平均每局得分","正确率"].join(","));
+    Object.keys(map).forEach(function(k){
+      var m = map[k];
+      lines.push([k, m.people.size, m.games, Math.round(m.score / m.games),
+        (m.total ? Math.round(m.ok / m.total * 100) + "%" : "—")]
+        .map(function(v){ return '"' + String(v).replace(/"/g, '""') + '"'; }).join(","));
+    });
+  } else {
+    var scores = loadScores();
+    lines.push(["班级","人数","对局数","平均累计积分","平均掌握率"].join(","));
+    classes.forEach(function(c){
+      var arr = c.members.map(function(no){ return scores[no] || {}; });
+      var n = arr.length;
+      var avg = n ? Math.round(arr.reduce(function(s,x){ return s + (x.score || 0); }, 0) / n) : 0;
+      var rate = (n && DB.length) ? Math.round(arr.reduce(function(s,x){ return s + (x.doneCount || 0) / DB.length; }, 0) / n * 100) + "%" : "—";
+      var gcount = allStudentGames().filter(function(g){ return c.members.indexOf(g.who.slice(2)) >= 0; }).length;
+      lines.push([c.name, n, gcount, avg, rate].map(function(v){
+        return '"' + String(v).replace(/"/g, '""') + '"';
+      }).join(","));
+    });
+  }
+  var blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  var d = new Date();
+  a.href = url;
+  a.download = "班级情况_" + (state.dim === "era" ? "朝代" : "班级") + "_" +
+    d.getFullYear() + p2(d.getMonth()+1) + p2(d.getDate()) + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1200);
+}
+
+window.addEventListener("hn-db-updated", function(){ renderAll(); });
+
+renderAll();
+</script>
+</body>
+</html>

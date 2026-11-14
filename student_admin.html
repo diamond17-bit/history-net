@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>历史关联网 · 学生管理</title>
+<link rel="stylesheet" href="shared.css?v=20261111">
+</head>
+<body>
+<div id="topnav-root"></div>
+
+<div class="page">
+  <div class="page-head">
+    <a class="back-btn" href="home.html" title="返回首页">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </a>
+    <div>
+      <h1 class="page-title">学生管理</h1>
+      <div class="page-sub" id="pageSub">管理班级学生名单，查看练习积分与人物掌握进度。</div>
+    </div>
+  </div>
+
+  <div class="card reveal" id="rosterCard">
+    <div id="rosterToolbar">
+      <div class="toolbar" style="margin-bottom:14px">
+        <select class="tb-select" id="fClass" title="按班级筛选"></select>
+        <select class="tb-select" id="fSort" title="排序方式">
+          <option value="id">按学号排序</option>
+          <option value="scoreDesc">积分从高到低</option>
+          <option value="scoreAsc">积分从低到高</option>
+          <option value="doneDesc">掌握人物从多到少</option>
+        </select>
+        <div class="grow">
+          <input class="tb-input" id="fKw" type="search" placeholder="搜索学生姓名或学号…" autocomplete="off">
+        </div>
+        <span class="sel-hint" id="selHint"></span>
+        <button class="btn danger" id="btnRemove" disabled onclick="removeSelected()" title="勾选学生后可移出班级">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px"><path d="M4 7h16"/><path d="M9.5 7V5.2c0-.7.6-1.2 1.2-1.2h2.6c.7 0 1.2.5 1.2 1.2V7"/><path d="M6.5 7l.9 12.1c.1 1 .9 1.9 2 1.9h5.2c1.1 0 1.9-.9 2-1.9L17.5 7"/></svg>
+          移出班级
+        </button>
+        <button class="btn ghost" id="btnExport" onclick="exportCSV()">导出数据</button>
+        <button class="btn primary" id="btnAdd" onclick="openAdd()">+ 添加学生</button>
+      </div>
+      <div class="bulk-msg" id="bulkMsg"></div>
+    </div>
+    <div id="rosterBody"></div>
+    <div class="roster-foot" id="rosterFoot"></div>
+  </div>
+</div>
+
+<!-- 添加学生弹窗（教师） -->
+<div class="modal-mask" id="addMask">
+  <div class="modal" style="width:min(560px,92vw)">
+    <div class="modal-head">
+      <h3 id="addTitle">添加学生</h3>
+      <div class="spacer"></div>
+      <button class="close" onclick="closeAdd()">取消</button>
+    </div>
+    <div style="padding:14px 22px;border-bottom:1px solid var(--line)">
+      <select class="tb-select" id="addClass" style="width:100%" onchange="renderCandidates()"></select>
+    </div>
+    <div id="addBody" style="padding:14px 18px;max-height:46vh;overflow:auto"></div>
+    <div style="padding:14px 22px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="closeAdd()">取消</button>
+      <button class="btn primary" onclick="confirmAdd()">确认添加</button>
+    </div>
+  </div>
+</div>
+
+<!-- 学生个人游戏结果详情（教师） -->
+<div class="modal-mask" id="detailMask">
+  <div class="modal" style="width:min(900px,94vw)">
+    <div class="modal-head">
+      <h3>个人游戏结果</h3>
+      <div class="spacer"></div>
+      <button class="close" onclick="closeDetail()">关闭</button>
+    </div>
+    <div id="detailBody" style="max-height:76vh;overflow:auto"></div>
+  </div>
+</div>
+
+<!-- 学生账号信息 / 修改密码（管理员） -->
+<div class="modal-mask" id="accMask">
+  <div class="modal" style="width:min(720px,94vw)">
+    <div class="modal-head">
+      <h3>学生账号信息</h3>
+      <div class="spacer"></div>
+      <button class="close" onclick="closeAccount()">关闭</button>
+    </div>
+    <div id="accBody" style="max-height:76vh;overflow:auto"></div>
+  </div>
+</div>
+
+<script src="accounts.js?v=20261111"></script>
+<script src="shared.js?v=20261111"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="data/kb-data.js?v=20261111"></script>
+<script src="data/db.js?v=20261111"></script>
+<script>
+(function(){
+  var d = requireAccount();
+  if(!d) return;
+  var u = d.user || {};
+  if(u.role === "s"){ location.replace("home_student.html"); return; }
+  window.ME = u;
+  document.getElementById("topnav-root").outerHTML = renderTopnav("users");
+})();
+
+/* ===== 角色：教师看班级学情，管理员只看账号信息 ===== */
+var IS_ADMIN = !!(window.ME && ME.role === "a");
+var state = { cls:"all", sort:"id", kw:"", sel:{} };
+var visibleNos = [];
+var flashTimer = 0;
+
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+    return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c];
+  });
+}
+function totalStudents(classes){
+  var set = new Set();
+  classes.forEach(function(c){ c.members.forEach(function(m){ set.add(m); }); });
+  return set.size;
+}
+function classNamesOf(no, classes){
+  return classes.filter(function(c){ return c.members.indexOf(no) >= 0; }).map(function(c){ return c.name; }).join("、");
+}
+function makeRow(no, classes, scores){
+  var acc = findStudent(no) || { name:"?", cls:"" };
+  var s = scores[no] || {};
+  return {
+    no: no,
+    name: acc.name,
+    cls: classNamesOf(no, classes) || acc.cls || "—",
+    best: s.bestLevel || 1,
+    score: s.score || 0,
+    done: s.doneCount || 0,
+    last: s.lastDate || "—"
+  };
+}
+function collect(){
+  var rows = [];
+  if(IS_ADMIN){
+    /* 管理员：数据源是 accounts.js 账号体系，不读班级/成绩 */
+    rows = allAccounts("s").map(function(a){
+      return { no:a.id, name:a.name, cls:a.cls || "—" };
+    });
+  } else {
+    var classes = loadClasses();
+    var scores = loadScores();
+    if(state.cls === "all"){
+      var seen = {};
+      classes.forEach(function(c){
+        c.members.forEach(function(no){
+          if(seen[no]) return;
+          seen[no] = 1;
+          rows.push(makeRow(no, classes, scores));
+        });
+      });
+    } else {
+      var cls = classes.filter(function(c){ return String(c.id) === state.cls; })[0];
+      if(cls) cls.members.forEach(function(no){ rows.push(makeRow(no, classes, scores)); });
+    }
+  }
+  var kw = state.kw.trim().toLowerCase();
+  if(kw){
+    rows = rows.filter(function(r){
+      return String(r.name).toLowerCase().indexOf(kw) >= 0 || String(r.no).toLowerCase().indexOf(kw) >= 0;
+    });
+  }
+  if(state.sort === "id") rows.sort(function(a,b){ return String(a.no).localeCompare(String(b.no)); });
+  else if(state.sort === "name") rows.sort(function(a,b){ return String(a.name).localeCompare(String(b.name), "zh"); });
+  else if(state.sort === "scoreAsc") rows.sort(function(a,b){ return a.score - b.score; });
+  else if(state.sort === "doneDesc") rows.sort(function(a,b){ return b.done - a.done || b.score - a.score; });
+  else rows.sort(function(a,b){ return b.score - a.score; });
+  return rows;
+}
+
+function currentClass(){
+  var classes = loadClasses();
+  return classes.filter(function(c){ return String(c.id) === state.cls; })[0] || null;
+}
+/* 批量移出的目标班级：优先用筛选的班级；「全部班级」下若所选学生同属一个班，也可直接移出 */
+function targetClassFor(nos){
+  var cls = currentClass();
+  if(cls) return { cls: cls, ambiguous: false };
+  var classes = loadClasses().filter(function(c){
+    return nos.every(function(no){ return c.members.indexOf(no) >= 0; });
+  });
+  if(classes.length === 1) return { cls: classes[0], ambiguous: false };
+  return { cls: null, ambiguous: classes.length > 1 };
+}
+
+function renderFilterOptions(){
+  var classes = loadClasses();
+  var sel = document.getElementById("fClass");
+  var opts = '<option value="all">全部班级</option>' + classes.map(function(c){
+    return '<option value="' + c.id + '">' + esc(c.name) + '</option>';
+  }).join("");
+  sel.innerHTML = opts;
+  if(state.cls !== "all" && !classes.some(function(c){ return String(c.id) === state.cls; })) state.cls = "all";
+  sel.value = state.cls;
+}
+
+function syncSelUI(){
+  var box = document.getElementById("selAll");
+  var btn = document.getElementById("btnRemove");
+  var hint = document.getElementById("selHint");
+  if(IS_ADMIN){ if(hint) hint.textContent = ""; return; }
+  var count = Object.keys(state.sel).length;
+  var n = visibleNos.length;
+  if(box){
+    box.checked = count > 0 && count === n;
+    box.indeterminate = count > 0 && count < n;
+    box.disabled = !n;
+  }
+  btn.disabled = count === 0;
+  var target = count ? targetClassFor(Object.keys(state.sel)) : { cls:null, ambiguous:false };
+  if(!count){
+    btn.title = "勾选至少一名学生后才能移出班级";
+    hint.innerHTML = "勾选学生后可批量移出";
+  } else if(target.cls){
+    btn.title = "把选中的 " + count + " 名学生移出「" + target.cls.name + "」";
+    hint.innerHTML = "已选 <b>" + count + "</b> 名";
+  } else {
+    btn.title = "所选学生分布在多个班级，请先在上方选择具体班级";
+    hint.innerHTML = "已选 <b>" + count + "</b> 名 · 跨班级";
+  }
+}
+
+function renderTable(){
+  var classes = loadClasses();
+  var body = document.getElementById("rosterBody");
+  var foot = document.getElementById("rosterFoot");
+  var rows;
+
+  if(!IS_ADMIN && !classes.length){
+    body.innerHTML =
+      '<div class="roster-empty"><b>还没有班级</b>' +
+      '学生管理依赖班级名单。请先到「创建班级」建一个班，再把学生加入名单。<br>' +
+      '<a class="btn primary" style="margin-top:16px" href="class_create.html">去创建班级</a></div>';
+    foot.innerHTML = "";
+    visibleNos = [];
+    state.sel = {};
+    syncSelUI();
+    return;
+  }
+
+  rows = collect();
+  visibleNos = rows.map(function(r){ return String(r.no); });
+  /* 选中集合只保留当前可见的学生，避免误操作被筛掉的人 */
+  Object.keys(state.sel).forEach(function(no){
+    if(visibleNos.indexOf(no) < 0) delete state.sel[no];
+  });
+
+  if(!rows.length){
+    var tip = IS_ADMIN
+      ? '账号表（accounts.js）里没有匹配的学生账号。'
+      : (state.cls === "all"
+        ? '调整筛选条件或搜索关键词再试试。'
+        : '这个班级还没有学生。点击右上角「添加学生」，把账号加入这个班。');
+    body.innerHTML = '<div class="roster-empty"><b>没有匹配的学生</b>' + tip + '</div>';
+  } else if(IS_ADMIN){
+    body.innerHTML =
+      '<div class="tbl-wrap"><table class="tbl pro" style="min-width:640px">' +
+      '<thead><tr><th>学号 / 账号</th><th>姓名</th><th>班级</th><th style="width:110px">操作</th></tr></thead><tbody>' +
+      rows.map(function(r){
+        return '<tr data-no="' + esc(r.no) + '">' +
+          '<td class="num">' + esc(r.no) + '</td>' +
+          '<td><div class="stu"><div class="stu-av">' + esc(String(r.name).slice(0,1)) + '</div>' +
+            '<div><div class="stu-name">' + esc(r.name) + '</div><div class="badge-on">学生账号</div></div></div></td>' +
+          '<td>' + esc(r.cls) + '</td>' +
+          '<td><div class="row-ops">' +
+            '<button class="icon-btn view" title="查看账号信息 / 修改密码" onclick="openAccount(\'' + esc(r.no) + '\')">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+            '<path d="M2.6 12S6.2 5.8 12 5.8 21.4 12 21.4 12 17.8 18.2 12 18.2 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></svg>' +
+            '</button></div></td>' +
+        '</tr>';
+      }).join("") + '</tbody></table></div>';
+  } else {
+    body.innerHTML =
+      '<div class="tbl-wrap"><table class="tbl pro" style="min-width:960px">' +
+      '<thead><tr><th class="chk-col"><input type="checkbox" id="selAll" title="全选当前列表" aria-label="全选当前列表"></th>' +
+      '<th>学号</th><th>姓名</th><th>班级</th>' +
+      '<th class="num">最高关卡</th><th class="num">累计积分</th><th class="num">掌握人物</th>' +
+      '<th>最近学习</th><th style="width:96px">操作</th></tr></thead><tbody>' +
+      rows.map(function(r){
+        var no = String(r.no);
+        var on = state.sel[no] ? " on" : "";
+        return '<tr data-no="' + esc(no) + '"' + (on ? ' class="on"' : '') + '>' +
+          '<td class="chk-col"><input type="checkbox" class="rowChk" value="' + esc(no) + '"' + (state.sel[no] ? " checked" : "") + ' aria-label="选择 ' + esc(r.name) + '"></td>' +
+          '<td class="num">' + esc(no) + '</td>' +
+          '<td><div class="stu"><div class="stu-av">' + esc(String(r.name).slice(0,1)) + '</div>' +
+            '<div><div class="stu-name">' + esc(r.name) + '</div><div class="badge-on">在读</div></div></div></td>' +
+          '<td>' + esc(r.cls) + '</td>' +
+          '<td class="num">Lv ' + r.best + '</td>' +
+          '<td class="num sc">' + r.score + '</td>' +
+          '<td class="num">' + r.done + '/' + (DB.length || "—") + '</td>' +
+          '<td>' + esc(r.last) + '</td>' +
+          '<td><div class="row-ops">' +
+            '<button class="icon-btn view" title="查看游戏结果" onclick="openDetail(\'' + esc(no) + '\')">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+            '<path d="M2.6 12S6.2 5.8 12 5.8 21.4 12 21.4 12 17.8 18.2 12 18.2 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></svg>' +
+            '</button>' +
+            '</div></td>' +
+        '</tr>';
+      }).join("") +
+      '</tbody></table></div>';
+  }
+
+  if(IS_ADMIN){
+    var totalAcc = allAccounts("s").length;
+    foot.innerHTML =
+      '<div>共 ' + totalAcc + ' 个学生账号 · 当前显示 ' + rows.length + ' 个</div>' +
+      '<div>账号数据来自 accounts.js · 改密记录保存在本机浏览器</div>';
+  } else {
+    var cls = state.cls === "all" ? null : currentClass();
+    foot.innerHTML =
+      '<div>共 ' + totalStudents(classes) + ' 名学生 · 当前显示 ' + rows.length + ' 名</div>' +
+      '<div>' + (cls
+        ? '班级码 <code style="font-family:\'JetBrains Mono\',Menlo,Consolas,monospace;color:var(--accent-ink);background:var(--accent-soft);padding:1px 7px;border-radius:6px">' + esc(cls.code) + '</code>'
+        : '按班级筛选可查看班级码') + '</div>';
+  }
+  syncSelUI();
+}
+
+function renderAll(){
+  if(!IS_ADMIN) renderFilterOptions();
+  renderTable();
+}
+
+/* ---- 事件 ---- */
+document.getElementById("fClass").addEventListener("change", function(){
+  state.cls = this.value;
+  state.sel = {};
+  renderTable();
+});
+document.getElementById("fSort").addEventListener("change", function(){ state.sort = this.value; renderTable(); });
+document.getElementById("fKw").addEventListener("input", function(){ state.kw = this.value; renderTable(); });
+
+document.getElementById("rosterBody").addEventListener("change", function(e){
+  var t = e.target;
+  if(t && t.id === "selAll"){
+    state.sel = {};
+    if(t.checked) visibleNos.forEach(function(no){ state.sel[no] = 1; });
+    renderTable();
+    return;
+  }
+  var cb = t && t.closest ? t.closest(".rowChk") : null;
+  if(!cb) return;
+  if(cb.checked) state.sel[cb.value] = 1;
+  else delete state.sel[cb.value];
+  var tr = cb.closest("tr");
+  if(tr) tr.classList.toggle("on", cb.checked);
+  syncSelUI();
+});
+
+document.getElementById("rosterBody").addEventListener("click", function(e){
+  if(e.target.closest("input,button,a,label")) return;
+  var tr = e.target.closest("tr[data-no]");
+  if(!tr) return;
+  openStudent(tr.getAttribute("data-no"));
+});
+
+function openStudent(no){
+  if(IS_ADMIN) openAccount(no);
+  else openDetail(no);
+}
+
+function flash(text){
+  var el = document.getElementById("bulkMsg");
+  el.textContent = text;
+  el.classList.add("on");
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(function(){ el.classList.remove("on"); }, 4200);
+}
+
+/* ---- 批量移出班级（教师） ---- */
+function removeSelected(){
+  if(IS_ADMIN) return;
+  var nos = Object.keys(state.sel);
+  if(!nos.length){ flash("请先勾选至少一名学生。"); return; }
+  var pick = targetClassFor(nos);
+  if(!pick.cls){
+    flash(pick.ambiguous
+      ? "所选学生分布在多个班级，请先在左上角选择要移出的具体班级。"
+      : "这些学生当前不在任何班级名单中。");
+    return;
+  }
+  var cls = pick.cls;
+
+  var names = nos.map(function(no){ return (findStudent(no) || {}).name || no; });
+  var ok = confirm(
+    "确定把选中的 " + nos.length + " 名学生移出「" + cls.name + "」吗？\n\n" +
+    names.join("、") + "\n\n" +
+    "说明：只移除班级名单关系，学生账号与历史成绩都会保留。"
+  );
+  if(!ok) return;
+
+  var classes = loadClasses();
+  var target = classes.filter(function(c){ return String(c.id) === String(cls.id); })[0];
+  if(!target) return;
+  target.members = target.members.filter(function(m){ return nos.indexOf(m) < 0; });
+  saveClasses(classes);
+  state.sel = {};
+  renderAll();
+  flash("✓ 已将 " + nos.length + " 名学生移出「" + cls.name + "」，账号与成绩已保留。");
+}
+
+/* ---- 导出 CSV（当前筛选结果） ---- */
+function exportCSV(){
+  var rows = collect();
+  if(!rows.length){ alert("当前没有可导出的学生记录。"); return; }
+  var head, lines;
+  if(IS_ADMIN){
+    head = ["学号","姓名","班级","密码"];
+    lines = [head.join(",")].concat(rows.map(function(r){
+      var acc = findStudent(r.no) || {};
+      return [r.no, r.name, r.cls, effectivePw("s", r.no, acc.pw || "")]
+        .map(function(v){ return '"' + String(v).replace(/"/g,'""') + '"'; }).join(",");
+    }));
+  } else {
+    head = ["学号","姓名","班级","最高关卡","累计积分","掌握人物","最近学习"];
+    lines = [head.join(",")].concat(rows.map(function(r){
+      return [r.no, r.name, r.cls, "Lv " + r.best, r.score, r.done + "/" + (DB.length || 0), r.last]
+        .map(function(v){ return '"' + String(v).replace(/"/g,'""') + '"'; }).join(",");
+    }));
+  }
+  var blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type:"text/csv;charset=utf-8" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  var d = new Date();
+  var stamp = d.getFullYear() + String(d.getMonth()+1).padStart(2,"0") + String(d.getDate()).padStart(2,"0");
+  a.href = url;
+  a.download = (IS_ADMIN ? "学生账号_" : "学生管理_") + stamp + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1200);
+}
+
+/* ---- 添加学生（教师） ---- */
+function openAdd(){
+  var classes = loadClasses();
+  if(!classes.length){
+    alert("还没有班级，请先到「创建班级」建班，再添加学生。");
+    return;
+  }
+  var sel = document.getElementById("addClass");
+  sel.innerHTML = classes.map(function(c){
+    return '<option value="' + c.id + '">' + esc(c.name) + '（' + c.members.length + ' 人）</option>';
+  }).join("");
+  if(state.cls !== "all" && classes.some(function(c){ return String(c.id) === state.cls; })) sel.value = state.cls;
+  renderCandidates();
+  document.getElementById("addMask").classList.add("on");
+}
+function closeAdd(){ document.getElementById("addMask").classList.remove("on"); }
+
+function renderCandidates(){
+  var cid = document.getElementById("addClass").value;
+  var classes = loadClasses();
+  var cls = classes.filter(function(c){ return String(c.id) === cid; })[0];
+  var inCls = new Set(cls ? cls.members : []);
+  var cand = allAccounts("s").filter(function(a){ return !inCls.has(a.id); });
+  document.getElementById("addTitle").textContent = cls ? "添加学生到「" + cls.name + "」" : "添加学生";
+  document.getElementById("addBody").innerHTML = cand.length
+    ? cand.map(function(a){
+        return '<label style="display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--line);cursor:pointer;font-size:15px">' +
+          '<input type="checkbox" class="addChk" value="' + esc(a.id) + '">' +
+          '<span style="font-weight:600">' + esc(a.name) + '</span>' +
+          '<span style="color:var(--ink-3)">' + esc(a.id) + '</span>' +
+          '<span style="color:var(--ink-3);margin-left:auto">' + esc(a.cls || "") + '</span></label>';
+      }).join("")
+    : '<div class="empty-tip">账号表中没有可添加的学生了。</div>';
+}
+
+function confirmAdd(){
+  var ids = [].slice.call(document.querySelectorAll(".addChk:checked")).map(function(c){ return c.value; });
+  if(ids.length){
+    var classes = loadClasses();
+    var cls = classes.filter(function(c){ return String(c.id) === document.getElementById("addClass").value; })[0];
+    if(cls){
+      ids.forEach(function(id){ if(cls.members.indexOf(id) < 0) cls.members.push(id); });
+      saveClasses(classes);
+    }
+  }
+  closeAdd();
+  renderAll();
+}
+
+/* ---- 学生个人游戏结果详情（教师） ---- */
+function rawGames(){
+  try{ return JSON.parse(localStorage.getItem("history_net_games_v1")) || []; }catch(e){ return []; }
+}
+function gamesOf(no){
+  var key = "s|" + no;
+  return rawGames().filter(function(g){
+    return g && g.role === "s" && g.who === key;
+  }).map(function(g){
+    var iso = (typeof dateISO === "function") ? dateISO(g.date) : "";
+    return Object.assign({}, g, { date: iso || "" });
+  });
+}
+function accOf(games){
+  var ok = 0, total = 0;
+  games.forEach(function(g){ ok += g.ok || 0; total += g.total || 0; });
+  return total ? Math.round(ok / total * 100) : null;
+}
+function barRow(name, pct, label){
+  return '<div class="sa-bar-row"><div class="nm" title="' + esc(name) + '">' + esc(name) + '</div>' +
+    '<div class="tr"><div class="fl" style="width:' + Math.max(0, Math.min(100, pct)) + '%"></div></div>' +
+    '<div class="vl">' + esc(label) + '</div></div>';
+}
+function emptyNote(text){
+  return '<div class="empty-tip" style="padding:4px 0;color:var(--ink-3);font-size:13px;line-height:1.7;text-align:left">' + text + '</div>';
+}
+function eraOrder(){
+  return (window.HNDB && Array.isArray(HNDB.eraOrder)) ? HNDB.eraOrder :
+    (typeof ERA_ORDER !== "undefined" ? ERA_ORDER : []);
+}
+function openDetail(no){
+  var acc = findStudent(no) || { name:"?", cls:"" };
+  var classes = loadClasses();
+  var clsNames = classNamesOf(no, classes);
+  var scores = loadScores();
+  var s = scores[no] || {};
+  var games = gamesOf(no);
+  var myAcc = accOf(games);
+  var html = "";
+
+  html += '<div class="stu-detail-head"><div class="av">' + esc(String(acc.name).slice(0,1)) + '</div>' +
+    '<div><div class="nm">' + esc(acc.name) + ' <span class="badge-on">在读</span></div>' +
+    '<div class="meta">学号 ' + esc(no) + ' · ' + esc(clsNames || acc.cls || "未分班") + '</div></div></div>';
+
+  html += '<div class="detail-sec"><div class="sa-stats" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));margin:0">' +
+    '<div class="sa-stat"><div class="v">' + (s.score || 0) + '</div><div class="l">累计积分</div></div>' +
+    '<div class="sa-stat"><div class="v">Lv ' + (s.bestLevel || 1) + '</div><div class="l">最高关卡</div></div>' +
+    '<div class="sa-stat"><div class="v">' + (s.doneCount || 0) + (DB.length ? '<em> / ' + DB.length + '</em>' : '') + '</div><div class="l">掌握人物</div></div>' +
+    '<div class="sa-stat"><div class="v">' + games.length + '<em> 局</em></div><div class="l">对局记录</div></div>' +
+    '</div></div>';
+
+  /* 朝代分布 */
+  html += '<div class="detail-sec"><div class="dt">朝代分布<small>按对局记录中的朝代聚合</small></div>';
+  if(!games.length){
+    html += emptyNote('暂无记录：需要该生完成至少一局「单机练习 / 同题对战」，记录才会写入对局存档。');
+  } else {
+    var map = {};
+    games.forEach(function(g){
+      var k = (g.era && g.era !== "all") ? g.era : "未标注";
+      (map[k] = map[k] || []).push(g);
+    });
+    var order = eraOrder();
+    var keys = Object.keys(map).sort(function(a, b){
+      var ia = order.indexOf(a), ib = order.indexOf(b);
+      if(ia < 0) ia = 999;
+      if(ib < 0) ib = 999;
+      return ia - ib;
+    });
+    var maxN = Math.max.apply(null, keys.map(function(k){ return map[k].length; }).concat([1]));
+    keys.forEach(function(k){
+      var arr = map[k];
+      var sum = arr.reduce(function(t, g){ return t + (g.score || 0); }, 0);
+      html += barRow(k, arr.length / maxN * 100, arr.length + " 局 · 均 " + Math.round(sum / arr.length) + " 分");
+    });
+  }
+  html += '</div>';
+
+  /* 关卡正确率 */
+  html += '<div class="detail-sec"><div class="dt">关卡正确率（L1–L5）<small>答对数 / 作答总数</small></div>';
+  if(!games.some(function(g){ return (g.total || 0) > 0; })){
+    html += emptyNote('暂无记录：需要在各关卡完成练习并提交答案，才能统计正确率。');
+  } else {
+    for(var lv = 1; lv <= 5; lv++){
+      var arr2 = games.filter(function(g){ return (g.level || 1) === lv; });
+      var ok = 0, total = 0;
+      arr2.forEach(function(g){ ok += g.ok || 0; total += g.total || 0; });
+      var pct = total ? Math.round(ok / total * 100) : 0;
+      html += barRow("L" + lv, pct, total ? pct + "%（" + ok + "/" + total + "）" : "暂无记录");
+    }
+  }
+  html += '</div>';
+
+  /* 积分分布 */
+  html += '<div class="detail-sec"><div class="dt">积分分布（按关卡累计）<small>该生在 L1–L5 各关卡获得的积分</small></div>';
+  if(!games.length){
+    html += emptyNote('暂无记录：完成练习后，这里会按关卡显示积分分布。');
+  } else {
+    var sums = [];
+    for(var lv2 = 1; lv2 <= 5; lv2++){
+      var arr3 = games.filter(function(g){ return (g.level || 1) === lv2; });
+      sums.push({ lv: lv2, n: arr3.length, sum: arr3.reduce(function(t, g){ return t + (g.score || 0); }, 0) });
+    }
+    var maxSum = Math.max.apply(null, sums.map(function(x){ return x.sum; }).concat([1]));
+    sums.forEach(function(x){
+      html += barRow("L" + x.lv, x.sum / maxSum * 100, x.sum + " 分 · " + x.n + " 局");
+    });
+  }
+  html += '</div>';
+
+  /* 班级排名 */
+  html += '<div class="detail-sec"><div class="dt">班级排名<small>累计积分 / 答题正确率在班内的名次</small></div>';
+  var myClasses = classes.filter(function(c){ return c.members.indexOf(no) >= 0; });
+  if(!myClasses.length){
+    html += emptyNote('暂无班级：该生尚未加入任何班级，无法计算班内排名。请先在「学生管理」中把该生加入班级。');
+  } else if(!games.length){
+    html += emptyNote('暂无对局记录：正确率排名需要该生有练习记录；积分排名已可按成绩仓库计算。');
+  }
+  myClasses.forEach(function(c){
+    var mem = c.members;
+    var myScore = (scores[no] || {}).score || 0;
+    var sRank = 1 + mem.filter(function(m){ return ((scores[m] || {}).score || 0) > myScore; }).length;
+    var accList = mem.map(function(m){ return { m: m, acc: accOf(gamesOf(m)) }; })
+      .filter(function(x){ return x.acc != null; });
+    var aRank = "—", aOf = accList.length;
+    if(myAcc != null && accList.length){
+      aRank = 1 + accList.filter(function(x){ return x.acc > myAcc; }).length;
+    }
+    html += '<div style="font-size:13px;font-weight:800;margin:4px 0 8px">' + esc(c.name) + '</div>' +
+      '<div class="rank-cards" style="margin-bottom:12px">' +
+        '<div class="rank-card"><div class="k">积分排名</div><div class="n">' + sRank + '<em> / ' + mem.length + '</em></div></div>' +
+        '<div class="rank-card"><div class="k">正确率排名' + (myAcc == null ? "" : "（" + myAcc + "%）") + '</div>' +
+          '<div class="n">' + aRank + '<em> / ' + aOf + '</em></div></div>' +
+      '</div>';
+  });
+  html += '</div>';
+
+  document.getElementById("detailBody").innerHTML = html;
+  document.getElementById("detailMask").classList.add("on");
+}
+function closeDetail(){ document.getElementById("detailMask").classList.remove("on"); }
+document.getElementById("detailMask").addEventListener("click", function(e){
+  if(e.target === this) closeDetail();
+});
+
+/* ---- 管理员：学生账号信息 / 修改密码 ---- */
+function maskPw(pw){
+  pw = String(pw || "");
+  return pw ? new Array(pw.length + 1).join("•") : "—";
+}
+function accField(k, v){
+  return '<div class="acc-field"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>';
+}
+function openAccount(no){
+  var acc = findStudent(no);
+  if(!acc){ alert("账号表中找不到该学生。"); return; }
+  var cur = effectivePw("s", acc.id, acc.pw || "");
+  var overridden = hasPwOverride("s", acc.id);
+  var html = "";
+
+  html += '<div class="stu-detail-head"><div class="av">' + esc(String(acc.name || "?").slice(0,1)) + '</div>' +
+    '<div><div class="nm">' + esc(acc.name) + ' <span class="badge-on">学生账号</span></div>' +
+    '<div class="meta">数据来源：accounts.js 账号体系' + (overridden ? ' · 密码已在本机修改' : '') + '</div></div></div>';
+
+  html += '<div class="detail-sec"><div class="dt">账号信息<small>仅展示账号字段，不含游戏成绩</small></div>' +
+    '<div class="acc-grid">' +
+      accField("学号 / 账号", acc.id) +
+      accField("姓名", acc.name) +
+      accField("班级", acc.cls || "—") +
+      accField("角色", acc.group || "学生") +
+      '<div class="acc-field"><div class="k">登录密码</div><div class="v pw-line">' +
+        '<span id="curPw" data-pw="' + esc(cur) + '">' + esc(maskPw(cur)) + '</span>' +
+        '<button class="link-btn" id="pwToggle" onclick="toggleCurPw()">显示</button>' +
+      '</div></div>' +
+    '</div></div>';
+
+  html += '<div class="detail-sec"><div class="dt">修改密码<small>保存后立即生效，下次登录请使用新密码</small></div>' +
+    '<div class="pw-form">' +
+      '<div class="field"><label>新密码</label><input id="newPw1" type="password" maxlength="30" placeholder="至少 6 位" autocomplete="new-password"></div>' +
+      '<div class="field"><label>确认新密码</label><input id="newPw2" type="password" maxlength="30" placeholder="再次输入新密码" autocomplete="new-password"></div>' +
+    '</div>' +
+    '<div class="pw-actions"><button class="btn primary" onclick="savePwOfStudent(\'' + esc(acc.id).replace(/'/g,"") + '\')">保存新密码</button>' +
+      '<span class="form-msg" id="pwMsg"></span></div>' +
+    '<div class="pw-note">说明：accounts.js 是随页面加载的静态账号表，浏览器无法回写文件本身。新密码写入本机浏览器存储（' + LS_PW + '，键为 “角色|账号”），登录页按该记录校验，所以改完即生效；换浏览器、清缓存或换设备后需重新设置，原始 accounts.js 未被改动。</div>' +
+  '</div>';
+
+  document.getElementById("accBody").innerHTML = html;
+  document.getElementById("accMask").classList.add("on");
+  var f = document.getElementById("newPw1");
+  if(f) setTimeout(function(){ try{ f.focus(); }catch(e){} }, 60);
+}
+function closeAccount(){ document.getElementById("accMask").classList.remove("on"); }
+document.getElementById("accMask").addEventListener("click", function(e){
+  if(e.target === this) closeAccount();
+});
+
+function toggleCurPw(){
+  var el = document.getElementById("curPw");
+  var btn = document.getElementById("pwToggle");
+  if(!el) return;
+  var shown = btn.getAttribute("data-shown") === "1";
+  el.textContent = shown ? maskPw(el.getAttribute("data-pw")) : el.getAttribute("data-pw");
+  btn.textContent = shown ? "显示" : "隐藏";
+  btn.setAttribute("data-shown", shown ? "0" : "1");
+}
+
+function savePwOfStudent(no){
+  var acc = findStudent(no);
+  var msg = document.getElementById("pwMsg");
+  function setMsg(text, ok){
+    if(!msg) return;
+    msg.textContent = text;
+    msg.className = "form-msg " + (ok ? "ok" : "err");
+  }
+  if(!acc){ setMsg("账号不存在，无法修改", false); return; }
+  var p1 = document.getElementById("newPw1").value;
+  var p2 = document.getElementById("newPw2").value;
+  if(!p1 || !p2){ setMsg("请完整填写两次新密码", false); return; }
+  if(p1.length < 6){ setMsg("新密码至少 6 位", false); return; }
+  if(p1 !== p2){ setMsg("两次输入的新密码不一致", false); return; }
+  var cur = effectivePw("s", acc.id, acc.pw || "");
+  if(p1 === cur){ setMsg("新密码不能与当前密码相同", false); return; }
+
+  setPassword("s", acc.id, p1);
+  var el = document.getElementById("curPw");
+  if(el){
+    el.setAttribute("data-pw", p1);
+    el.textContent = maskPw(p1);
+    var btn = document.getElementById("pwToggle");
+    if(btn){ btn.textContent = "显示"; btn.setAttribute("data-shown", "0"); }
+  }
+  document.getElementById("newPw1").value = "";
+  document.getElementById("newPw2").value = "";
+  setMsg("✓ 已保存，新密码已生效（下次登录使用新密码）", true);
+}
+
+/* ---- 初始化：按角色裁剪界面 ---- */
+/* ?cls=<id>：从「创建班级」页的「查看学生」直达该班级 */
+function preselectedClass(){
+  var m = location.search.match(/[?&]cls=([^&]+)/);
+  if(!m) return null;
+  var id;
+  try{ id = decodeURIComponent(m[1]); }catch(e){ id = m[1]; }
+  return loadClasses().some(function(c){ return String(c.id) === id; }) ? id : null;
+}
+
+function initRole(){
+  var sub = document.getElementById("pageSub");
+  if(!IS_ADMIN) { syncSelUI(); return; }
+
+  if(sub) sub.textContent = "查看学生账号信息与登录密码；游戏成绩请在管理首页查看。";
+  var fClass = document.getElementById("fClass");
+  if(fClass) fClass.style.display = "none";
+  var btnAdd = document.getElementById("btnAdd");
+  if(btnAdd) btnAdd.style.display = "none";
+  var btnRemove = document.getElementById("btnRemove");
+  if(btnRemove) btnRemove.style.display = "none";
+  var hint = document.getElementById("selHint");
+  if(hint) hint.style.display = "none";
+  var fSort = document.getElementById("fSort");
+  if(fSort){
+    fSort.innerHTML = '<option value="id">按学号排序</option><option value="name">按姓名排序</option>';
+    fSort.value = state.sort = "id";
+  }
+  var btnExport = document.getElementById("btnExport");
+  if(btnExport) btnExport.textContent = "导出账号";
+}
+
+window.addEventListener("hn-db-updated", function(){ renderTable(); });
+/* 班级在其它页面（创建班级 / 教师首页）被增删后，这里同步刷新名单与筛选项 */
+window.addEventListener("storage", function(e){ if(e.key === LS_CLASSES) renderAll(); });
+window.addEventListener("pageshow", function(e){ if(e.persisted) renderAll(); });
+
+if(!IS_ADMIN){
+  var pre = preselectedClass();
+  if(pre) state.cls = pre;
+}
+initRole();
+renderAll();
+</script>
+</body>
+</html>

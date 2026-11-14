@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>历史关联网 · 创建班级</title>
+<link rel="stylesheet" href="shared.css?v=20261111">
+</head>
+<body>
+<div id="topnav-root"></div>
+
+<div class="page">
+  <div class="page-head">
+    <a class="back-btn" href="home.html" title="返回首页">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </a>
+    <div>
+      <h1 class="page-title">创建班级</h1>
+      <div class="page-sub">建班后把班级码发给学生，学生名单在「学生管理」里维护。</div>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-bottom:20px;align-items:start">
+    <div class="card reveal">
+      <div class="section-title">新建班级</div>
+      <div class="form-msg" id="createMsg" style="margin-bottom:12px"></div>
+      <div class="field">
+        <label for="clsName">班级名称 <span style="color:var(--danger)">*</span></label>
+        <input id="clsName" maxlength="30" placeholder="如：2026级（11）班" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="clsStage">年级 / 学段（可选）</label>
+        <select id="clsStage"></select>
+      </div>
+      <div class="field">
+        <label for="clsNote">备注（可选）</label>
+        <textarea id="clsNote" maxlength="80" rows="3" placeholder="如：每周三第 6 节历史课使用"
+          style="height:auto;min-height:82px;padding:12px 15px;line-height:1.7;resize:vertical;font-family:inherit"></textarea>
+      </div>
+      <div class="row">
+        <button class="btn primary" onclick="submitCreate()">创建班级</button>
+        <button class="btn ghost" onclick="resetForm()">重置</button>
+        <span class="form-msg" id="formHint">班级名称必填，同一教师下不可重名。</span>
+      </div>
+    </div>
+
+    <div class="card reveal" style="--i:1">
+      <div class="section-title">班级码与学生加入</div>
+      <div id="codeBox">
+        <div class="empty-tip" style="padding:8px 4px;text-align:left">创建班级后，这里会显示班级码。</div>
+      </div>
+      <ol class="join-steps">
+        <li>在「学生管理」页点右上角 <b>+ 添加学生</b>，勾选要加入的账号并确认 —— 这是当前版本把学生放进班级的方式。</li>
+        <li>把<b>班级码</b>发给学生，用于线下核对班级（例如课上口头确认、写在黑板或练习卷上）。</li>
+        <li>学生登录后即可开始练习；练习成绩会出现在教师首页、学生管理与成绩分析中。</li>
+      </ol>
+      <div style="font-size:12.5px;color:var(--ink-3);margin-top:10px;line-height:1.8">
+        说明：现有版本没有「学生自助输入班级码加入」的接口，班级成员一律由教师端维护；班级码由系统随机生成，仅作标识与核对，不是登录凭证。
+      </div>
+    </div>
+  </div>
+
+  <div class="card reveal" style="--i:2">
+    <div class="section-title">已有班级（<span id="clsCount">0</span>）</div>
+    <div id="clsList"></div>
+  </div>
+</div>
+
+<script src="accounts.js?v=20261111"></script>
+<script src="shared.js?v=20261111"></script>
+<script>
+/* 学段取值与 data/db.js 的 STAGE_ORDER（知识库「学段」字段）保持一致，不另造取值 */
+var STAGE_OPTIONS = ["小学", "初中", "高中"];
+var ME = null;
+var shownClassId = null;
+
+function esc(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){
+    return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c];
+  });
+}
+function p2(n){ return String(n).padStart(2, "0"); }
+/* 班级创建时间：现有班级对象没有 createdAt 字段，用 id（Date.now()）推导；账号信息导入的班级 id 为 1，无法推导 */
+function fmtTime(id){
+  var n = Number(id);
+  if(!isFinite(n) || n < 1e12) return "—";
+  var d = new Date(n);
+  return d.getFullYear() + "-" + p2(d.getMonth()+1) + "-" + p2(d.getDate()) + " " + p2(d.getHours()) + ":" + p2(d.getMinutes());
+}
+function setMsg(el, text, ok){
+  if(!el) return;
+  el.textContent = text || "";
+  el.className = "form-msg" + (text ? (ok ? " ok" : " err") : "");
+}
+
+/* 复用 shared.js 的 makeClassCode()，只额外保证与已有班级码不重复 */
+function genCode(classes){
+  var used = {};
+  classes.forEach(function(c){ if(c.code) used[c.code] = 1; });
+  for(var i = 0; i < 50; i++){
+    var code = makeClassCode();
+    if(!used[code]) return code;
+  }
+  return makeClassCode();
+}
+
+function fillStages(){
+  var sel = document.getElementById("clsStage");
+  sel.innerHTML = '<option value="">不指定</option>' + STAGE_OPTIONS.map(function(s){
+    return '<option value="' + s + '">' + s + '</option>';
+  }).join("");
+}
+
+function resetForm(silent){
+  document.getElementById("clsName").value = "";
+  document.getElementById("clsStage").value = "";
+  document.getElementById("clsNote").value = "";
+  if(!silent) setMsg(document.getElementById("createMsg"), "", true);
+  document.getElementById("clsName").focus();
+}
+
+function submitCreate(){
+  var nameEl = document.getElementById("clsName");
+  var msg = document.getElementById("createMsg");
+  var name = nameEl.value.trim();
+  if(!name){ setMsg(msg, "！ 请填写班级名称", false); nameEl.focus(); return; }
+  if(name.length > 30){ setMsg(msg, "！ 班级名称最多 30 个字", false); nameEl.focus(); return; }
+
+  var classes = loadClasses();
+  if(classes.some(function(c){ return c.name === name; })){
+    setMsg(msg, "！ 班级名「" + name + "」已存在，请换一个名称", false);
+    nameEl.focus();
+    return;
+  }
+
+  var stage = document.getElementById("clsStage").value;
+  var note = document.getElementById("clsNote").value.trim();
+  var cls = { id: Date.now(), name: name, code: genCode(classes), members: [] };
+  if(stage) cls.stage = stage;     // 仅在填写时写入，未填写不新增字段
+  if(note) cls.note = note;
+  classes.push(cls);
+  saveClasses(classes);
+
+  /* 与原教师首页 createClass() 的行为一致：同步写入账号信息表的「所带班级2、3…」 */
+  if(ME && ME.no){
+    var x = loadExtra(); x.tCls = x.tCls || {};
+    var arr = x.tCls[ME.no] = x.tCls[ME.no] || [];
+    if(arr.indexOf(name) < 0) arr.push(name);
+    saveExtra(x);
+  }
+
+  resetForm(true);
+  setMsg(msg, "✓ 已创建班级「" + name + "」，班级码 " + cls.code + "，可发给学生。", true);
+  renderCode(cls);
+  renderList();
+}
+
+function renderCode(cls){
+  shownClassId = String(cls.id);
+  document.getElementById("codeBox").innerHTML =
+    '<div class="code-result">' +
+      '<div>' +
+        '<div class="k">班级码</div>' +
+        '<div class="code" id="codeText">' + esc(cls.code) + '</div>' +
+        '<div class="nm">' + esc(cls.name) + (cls.stage ? " · " + esc(cls.stage) : "") + '</div>' +
+      '</div>' +
+      '<div class="spacer"></div>' +
+      '<button class="btn ghost small" onclick="copyCode(\'' + esc(cls.code) + '\')">复制班级码</button>' +
+    '</div>' +
+    '<div style="font-size:12.5px;color:var(--ink-2);margin-bottom:14px">把上面的班级码发给学生，就能和这个班对上号了。</div>';
+}
+
+function copyCode(code){
+  function done(ok){
+    var el = document.getElementById("formHint");
+    setMsg(el, ok ? "✓ 班级码已复制" : "复制失败，请手动选中班级码", ok);
+    setTimeout(function(){ if(el) setMsg(el, "班级名称必填，同一教师下不可重名。", true); }, 2600);
+  }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(code).then(function(){ done(true); }, function(){ done(false); });
+    return;
+  }
+  try{
+    var ta = document.createElement("textarea");
+    ta.value = code; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    var ok = document.execCommand("copy");
+    ta.remove();
+    done(ok);
+  }catch(e){ done(false); }
+}
+
+function renderList(){
+  var classes = loadClasses();
+  var root = document.getElementById("clsList");
+  document.getElementById("clsCount").textContent = classes.length;
+  if(!classes.length){
+    root.innerHTML = '<div class="empty-tip">还没有班级，用左侧表单创建第一个班级。</div>';
+    return;
+  }
+  var rows = classes.map(function(c){
+    var meta = [];
+    if(c.stage) meta.push(esc(c.stage));
+    if(c.note) meta.push(esc(c.note));
+    var assigned = c.assigned || (ME && ME.cls && c.name === ME.cls);
+    return '<tr data-id="' + esc(c.id) + '">' +
+      '<td><b>' + esc(c.name) + '</b>' +
+        (assigned ? ' <span class="chip" style="font-size:12px;padding:1px 8px">所带班级</span>' : "") +
+        (meta.length ? '<div style="font-size:12px;color:var(--ink-3);margin-top:3px;white-space:normal">' + meta.join(" · ") + '</div>' : "") +
+      '</td>' +
+      '<td><code style="font-family:\'JetBrains Mono\',Menlo,Consolas,monospace;color:var(--accent-ink);background:var(--accent-soft);padding:1px 7px;border-radius:6px;font-size:13px">' + esc(c.code) + '</code></td>' +
+      '<td class="num">' + c.members.length + '</td>' +
+      '<td>' + fmtTime(c.id) + '</td>' +
+      '<td><div class="row-ops">' +
+        '<a class="btn ghost small" href="home.html" title="到教师首页查看这个班的学情">进入班级</a>' +
+        '<a class="btn ghost small" href="student_admin.html?cls=' + encodeURIComponent(c.id) + '" title="到学生管理查看这个班的学生">查看学生</a>' +
+        '<button class="btn danger small" onclick="delClass(' + esc(c.id) + ')">删除</button>' +
+      '</div></td>' +
+    '</tr>';
+  }).join("");
+  root.innerHTML =
+    '<div class="tbl-wrap"><table class="tbl" style="min-width:720px">' +
+      '<thead><tr><th>班级名称</th><th>班级码</th><th class="num">人数</th><th>创建时间</th><th style="width:280px">操作</th></tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table></div>';
+}
+
+function delClass(cid){
+  var classes = loadClasses();
+  var cls = classes.filter(function(c){ return String(c.id) === String(cid); })[0];
+  if(!cls) return;
+  var assigned = cls.assigned || (ME && ME.cls && cls.name === ME.cls);
+  if(assigned){
+    alert("「" + cls.name + "」来自账号信息表里的「所带班级1」，教师首页会自动重建它，不能在这里删除。\n如需调整，请让管理员修改账号信息。");
+    return;
+  }
+  var ok = confirm(
+    "确定删除班级「" + cls.name + "」吗？\n\n" +
+    "班级码 " + cls.code + " 将失效；当前 " + cls.members.length + " 名学生的班级名单关系会一并移除。\n" +
+    "学生账号与历史成绩都会保留，但此操作不可撤销。"
+  );
+  if(!ok) return;
+
+  saveClasses(classes.filter(function(c){ return String(c.id) !== String(cid); }));
+
+  /* 同步清理账号信息表「所带班级2、3…」中的同名记录 */
+  var x = loadExtra();
+  if(x.tCls && ME && x.tCls[ME.no]){
+    x.tCls[ME.no] = x.tCls[ME.no].filter(function(n){ return n !== cls.name; });
+    saveExtra(x);
+  }
+
+  if(shownClassId === String(cid)){
+    shownClassId = null;
+    document.getElementById("codeBox").innerHTML =
+      '<div class="empty-tip" style="padding:8px 4px;text-align:left">创建班级后，这里会显示班级码。</div>';
+  }
+  setMsg(document.getElementById("createMsg"), "✓ 已删除班级「" + cls.name + "」，学生账号与成绩已保留。", true);
+  renderList();
+}
+
+/* 创建 / 删除后与其它页面（教师首页、学生管理）保持同步 */
+window.addEventListener("storage", function(e){
+  if(e.key === LS_CLASSES) renderList();
+});
+window.addEventListener("pageshow", function(e){ if(e.persisted) renderList(); });
+
+(function(){
+  var d = requireAccount();
+  if(!d) return;
+  var u = d.user || {};
+  if(u.role !== "t"){
+    location.replace(u.role === "a" ? "home.html" : "home_student.html");
+    return;
+  }
+  ME = u;
+  document.getElementById("topnav-root").outerHTML = renderTopnav("class");
+  fillStages();
+  document.getElementById("clsName").addEventListener("keydown", function(e){
+    if(e.key === "Enter"){ e.preventDefault(); submitCreate(); }
+  });
+  renderList();
+})();
+</script>
+</body>
+</html>

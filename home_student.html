@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>历史关联网 · 学生首页</title>
+<link rel="stylesheet" href="shared.css?v=20261111">
+</head>
+<body>
+<div id="topnav-root"></div>
+<div class="page" id="page"></div>
+
+<script src="accounts.js?v=20261111"></script>
+<script src="shared.js?v=20261111"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="data/kb-data.js?v=20261111"></script>
+<script src="data/db.js?v=20261111"></script>
+<script>
+requireAccount();
+const user = getUser();
+if(user.role==="t" || user.role==="a"){ location.href = "home.html"; }
+document.getElementById("topnav-root").outerHTML = renderTopnav("home");
+
+const page = document.getElementById("page");
+const prof = profile();
+const NET_DYNS = HNDB.eraOrder();
+const NET_DYN_SHORT = { "三国两晋南北朝":"三国·两晋", "外国近现代":"外国·近现代" };
+
+requestAnimationFrame(drawNetLinks);
+window.addEventListener("resize", drawNetLinks);
+
+function avatarHTML(u){
+  return u.avatar ? `<img src="${u.avatar}" alt="${u.name}">` : (u.name||"?")[0];
+}
+
+/* ============================================================
+   学生 / 游客：练习 + 战绩 + 关系网
+============================================================ */
+function renderStudent(){
+  const recent = persistRecent();
+  const done = prof.done || {};
+  const idLabel = user.role==="t" ? "工号" : user.role==="a" ? "账号" : "学号";
+  page.innerHTML = `
+  <div class="hero reveal">
+    <div class="avatar">${avatarHTML(user)}</div>
+    <div class="info">
+      <h1>${user.name}</h1>
+      <div class="sub">${ROLE_LABELS[user.role]||user.role}${user.cls?" · "+user.cls:""}${user.no?" · "+idLabel+" "+user.no:""}</div>
+      <div class="row" style="margin-top:14px">
+        <a class="btn primary" href="lobby.html?mode=single">▶ 继续练习</a>
+        <a class="btn ghost" href="lobby.html?mode=versus">同题对战</a>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n"><span data-count="${prof.totalScore||0}">0</span></div><div class="l">累计积分</div></div>
+      <div class="stat"><div class="n"><span data-count="${prof.bestLevel||1}">0</span><span class="of">级</span></div><div class="l">最高等级</div></div>
+      <div class="stat"><div class="n"><span data-count="${Object.keys(done).length}">0</span><span class="of">/${DB.length}</span></div><div class="l">已点亮人物</div></div>
+    </div>
+  </div>
+
+  <div class="grid-2 home-main" style="margin-bottom:20px">
+    <div class="card reveal" style="--i:1">
+      <div class="section-title">最近游戏情况</div>
+      ${renderRecent(recent)}
+    </div>
+    <div class="home-side reveal" style="--i:2">
+    <div class="card">
+      <div class="section-title">游戏方式</div>
+      <div class="mode-cards">
+        <a class="mode-card" href="lobby.html?mode=single">
+          <div class="mi">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="6"/><path d="M7 12h4M9 10v4"/><circle cx="16" cy="11" r="1.2" fill="currentColor" stroke="none"/><circle cx="18.5" cy="14" r="1.2" fill="currentColor" stroke="none"/></svg>
+          </div>
+          <div class="mb">
+            <div class="mt">单机练习 <span class="tag">模式一</span></div>
+            <div class="md">自选难度、国家、朝代与计时，整盘分组提交，错即展开知识卡。</div>
+          </div>
+          <div class="arrow">→</div>
+        </a>
+        <a class="mode-card" href="lobby.html?mode=versus">
+          <div class="mi">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4l6 6M14 14l6 6M4 20l6-6M14 10l6-6"/><path d="M15 4h5v5"/><path d="M4 15v5h5"/></svg>
+          </div>
+          <div class="mb">
+            <div class="mt">同题对战 <span class="tag">模式二</span></div>
+            <div class="md">进入房间与同组玩家收到同一套牌，谁先判完、判得准，分数自动上墙。</div>
+          </div>
+          <div class="arrow">→</div>
+        </a>
+      </div>
+    </div>
+    ${renderRadarCard()}
+    </div>
+  </div>
+
+  <div class="card reveal" style="--i:3">
+    ${renderNet()}
+  </div>`;
+  requestAnimationFrame(()=>{ drawNetLinks(); mountMotion(page); });
+}
+
+function renderRecent(recent){
+  if(!recent.length) return `<div class="empty-tip" style="padding:36px 4px">还没玩过，开始你的第一局吧！</div>`;
+  let html = `<div class="recent-row head">
+    <div class="tag">日期</div><div class="name">关卡信息</div><div class="score">得分</div><div class="date">对错率</div>
+  </div>`;
+  recent.slice(0,6).forEach(r=>{
+    const acc = r.total? Math.round(r.ok*100/r.total):0;
+    html += `<div class="recent-row">
+      <div class="tag">${r.date}</div>
+      <div style="min-width:0">
+        <div class="name">Lv${r.level} · ${NATION_LABEL[r.nation]||r.nation} · ${r.era||'全部'}</div>
+        <div class="tag">${r.versus?'⚔️ 对战':'🏠 单机'} · 选${r.pickN||"?"}人</div>
+      </div>
+      <div class="score">${r.score}</div>
+      <div style="color:${acc>=80?'var(--green)':acc>=50?'var(--gold)':'var(--red)'};font-weight:700">${acc}%</div>
+    </div>`;
+  });
+  return html;
+}
+
+/* ============================================================
+   个人成绩分析（雷达图）
+   口径：优先按朝代聚合「答题正确率」（ok/total），
+        朝代不足 3 个时退回按级别 L1–L5 聚合，仍不足则给空状态。
+============================================================ */
+function esc(s){
+  return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function radarDims(games, type){
+  const order = type === "era" ? HNDB.eraOrder() : ["Lv1","Lv2","Lv3","Lv4","Lv5"];
+  const map = {};
+  games.forEach(g=>{
+    let k;
+    if(type === "era"){ k = (g.era && g.era !== "all") ? g.era : ""; }
+    else { k = "Lv" + (g.level || 1); }
+    if(!k) return;
+    (map[k] = map[k] || []).push(g);
+  });
+  const list = Object.keys(map).sort((a,b)=>{
+    let ia = order.indexOf(a), ib = order.indexOf(b);
+    if(ia < 0) ia = 999;
+    if(ib < 0) ib = 999;
+    return ia - ib;
+  }).slice(0, 8).map(k=>{
+    const arr = map[k];
+    let ok = 0, total = 0, score = 0;
+    arr.forEach(g=>{ ok += g.ok||0; total += g.total||0; score += g.score||0; });
+    return {
+      name: k,
+      short: type === "era" ? (NET_DYN_SHORT[k] || k) : k.replace("Lv","L"),
+      value: total ? Math.round(ok * 100 / total) : 0,
+      n: arr.length,
+      avg: Math.round(score / arr.length)
+    };
+  }).filter(d=> d.n > 0);
+  return { type, list };
+}
+
+function radarData(){
+  const games = persistRecent().filter(g=> g && g.total > 0);
+  if(!games.length) return { empty: true };
+  const era = radarDims(games, "era");
+  if(era.list.length >= 3) return Object.assign({ unit:"答题正确率", basis:"按朝代" }, era);
+  const lv = radarDims(games, "level");
+  if(lv.list.length >= 3) return Object.assign({ unit:"答题正确率", basis:"按级别" }, lv);
+  return { insufficient: true, have: Math.max(era.list.length, lv.list.length) };
+}
+
+function radarSVG(d){
+  const list = d.list;
+  const W = 360, H = 205, cx = 180, cy = 106, R = 75;
+  const n = list.length;
+  const ang = i => -Math.PI / 2 + i * 2 * Math.PI / n;
+  const pt = (i, r) => [cx + Math.cos(ang(i)) * r, cy + Math.sin(ang(i)) * r];
+  const rings = [1,2,3,4].map(k=>{
+    const r = R * k / 4;
+    return `<polygon class="ring" points="${list.map((_,i)=>{const p=pt(i,r);return p[0].toFixed(1)+","+p[1].toFixed(1);}).join(" ")}"></polygon>`;
+  }).join("");
+  const axes = list.map((_,i)=>{
+    const p = pt(i, R);
+    return `<line class="axis" x1="${cx}" y1="${cy}" x2="${p[0].toFixed(1)}" y2="${p[1].toFixed(1)}"></line>`;
+  }).join("");
+  const shape = `<polygon class="shape" points="${list.map((it,i)=>{
+    const p = pt(i, R * (it.value / 100));
+    return p[0].toFixed(1) + "," + p[1].toFixed(1);
+  }).join(" ")}"></polygon>`;
+  const dots = list.map((it,i)=>{
+    const p = pt(i, R * (it.value / 100));
+    const tip = `${it.name}：正确率 ${it.value}%（${it.n} 局 · 平均 ${it.avg} 分）`;
+    return `<circle class="pt" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3.2"><title>${esc(tip)}</title></circle>
+      <circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="11" fill="transparent"><title>${esc(tip)}</title></circle>`;
+  }).join("");
+  const labels = list.map((it,i)=>{
+    const p = pt(i, R + 17);
+    const anchor = Math.abs(p[0] - cx) < 6 ? "middle" : (p[0] > cx ? "start" : "end");
+    const tip = `${it.name}：正确率 ${it.value}%（${it.n} 局 · 平均 ${it.avg} 分）`;
+    return `<text x="${p[0].toFixed(1)}" y="${p[1].toFixed(1)}" text-anchor="${anchor}">
+      <title>${esc(tip)}</title>${esc(it.short)} ${it.value}%</text>`;
+  }).join("");
+  return `<svg class="sa-radar ps-radar" viewBox="0 0 ${W} ${H}" role="img" aria-label="个人成绩雷达图">${rings}${axes}${shape}${dots}${labels}</svg>`;
+}
+
+function renderRadarCard(){
+  const d = radarData();
+  if(d.empty){
+    return `<div class="card ps-card">
+      <div class="section-title">成绩分析</div>
+      <div class="ps-empty">
+        <b>还没有成绩数据</b>
+        <span>完成一局单机练习或同题对战，这里会自动生成你的成绩雷达图。</span>
+        <a class="btn small primary" href="lobby.html?mode=single">去练习</a>
+      </div>
+    </div>`;
+  }
+  if(d.insufficient){
+    return `<div class="card ps-card">
+      <div class="section-title">成绩分析</div>
+      <div class="ps-empty">
+        <b>记录维度不足</b>
+        <span>至少覆盖 3 个朝代（或 3 个难度级别）才能绘制雷达图，当前仅 ${d.have} 个。</span>
+        <a class="btn small ghost" href="lobby.html?mode=single">再练一局</a>
+      </div>
+    </div>`;
+  }
+  const total = d.list.reduce((s,x)=> s + x.n, 0);
+  return `<div class="card ps-card">
+    <div class="section-title">成绩分析<span class="ps-basis">${d.basis} · 正确率</span></div>
+    <div class="ps-radar-wrap">${radarSVG(d)}</div>
+    <div class="sa-legend" style="justify-content:center;margin:0">
+      <span><i class="sw" style="background:#2196F3"></i>${d.unit}（${d.list.length} 个维度 · 共 ${total} 局）</span>
+    </div>
+  </div>`;
+}
+
+/* ============================================================
+   关系网
+============================================================ */
+function netEdges(){
+  const names = new Set(DB.map(p=>p.name));
+  const seen = new Set(), edges = [];
+  DB.forEach(p=> (p.lore||[]).forEach(l=>{
+    if(!names.has(l.b)) return;
+    const k = [p.name, l.b].sort().join("|");
+    if(seen.has(k)) return;
+    seen.add(k);
+    edges.push({ a:p.name, b:l.b });
+  }));
+  return edges;
+}
+function isLit(name){ return ((prof.done||{})[personKey(name)]||0) > 0; }
+
+function netDegree(edges){
+  const d = {};
+  edges.forEach(e=>{ d[e.a]=(d[e.a]||0)+1; d[e.b]=(d[e.b]||0)+1; });
+  return d;
+}
+
+function renderNet(){
+  const edges = netEdges();
+  const deg = netDegree(edges);
+  const litPeople = DB.filter(p=>isLit(p.name)).length;
+
+  // 每列按「已点亮 → 关系数多 → 序号」取人，让可见节点覆盖尽可能多的连线
+  const cols = [];
+  const vis = new Set();
+  NET_DYNS.forEach(dyn=>{
+    const people = DB.filter(p=> p.dyn===dyn).slice()
+      .sort((a,b)=> (isLit(b.name)?1:0)-(isLit(a.name)?1:0)
+        || (deg[b.name]||0)-(deg[a.name]||0)
+        || ((a.no||0)-(b.no||0)))
+      .slice(0, NET_COL_MAX);
+    if(!people.length) return;
+    people.forEach(p=> vis.add(p.name));
+    cols.push({ dyn, people });
+  });
+  const visEdges = edges.filter(e=> vis.has(e.a) && vis.has(e.b)).length;
+
+  let html = `<div class="net-head">
+    <div class="t">关系网</div>
+    <div class="st">已点亮 <b>${litPeople}</b> / ${DB.length} 人 · 当前可见连线 <b>${visEdges}</b> 条 / 全库 ${edges.length} 条 · 每列至多 ${NET_COL_MAX} 人</div>
+  </div>
+  <div class="net-scroll"><div class="net-stage" id="netStage">
+    <svg class="net-links" id="netLinks"></svg>
+    <div class="net-cols">`;
+
+  cols.forEach(({dyn, people})=>{
+    html += `<div class="net-col"><div class="line"></div>
+      <div class="era">${NET_DYN_SHORT[dyn]||dyn}</div>
+      <div class="nodes">`;
+    people.forEach(p=>{
+      html += `<div class="net-node${isLit(p.name)?" lit":""}" data-name="${p.name}" onclick="selectNetPerson('${p.name}')">${p.name}</div>`;
+    });
+    html += `</div></div>`;
+  });
+
+  html += `</div></div></div>
+  <div class="net-tip" id="netTip">点一个人，看他在这张网里的位置。</div>`;
+  return html;
+}
+
+function netDetailHTML(name){
+  const p = DB.find(x=> x.name===name);
+  if(!p) return "点一个人，看他在这张网里的位置。";
+  const tags = [p.dyn];
+  if(p.caliber) tags.push("字/号 " + p.caliber);
+  const links = (p.lore||[]).map(l=>{
+    const lit = isLit(name) && isLit(l.b);
+    return `连线：<b>${l.b}</b>（${l.text}）<em class="${lit?"lit":""}">${lit?"已点亮":"未点亮"}</em>`;
+  }).join("<br>");
+  return `<div class="nd-head"><b>${p.name}</b>${tags.map(t=>`<span>${t}</span>`).join("")}</div>
+    <div class="nd-desc">${p.event} · 作品：${p.work}</div>
+    <div class="nd-links">${links || "暂无可连线的人物"}</div>`;
+}
+
+function selectNetPerson(name){
+  document.querySelectorAll(".net-node").forEach(el=> el.classList.toggle("sel", el.dataset.name===name));
+  document.getElementById("netTip").innerHTML = netDetailHTML(name);
+  drawNetLinks();
+}
+
+function drawNetLinks(){
+  const stage = document.getElementById("netStage");
+  const svg = document.getElementById("netLinks");
+  if(!stage || !svg) return;
+  const sr = stage.getBoundingClientRect();
+  if(!sr.width || !sr.height) return;
+  svg.setAttribute("viewBox", `0 0 ${sr.width} ${sr.height}`);
+  const pos = {};
+  stage.querySelectorAll(".net-node").forEach(n=>{
+    const r = n.getBoundingClientRect();
+    pos[n.dataset.name] = { x: r.left - sr.left + r.width/2, y: r.top - sr.top + r.height/2 };
+  });
+  const selEl = stage.querySelector(".net-node.sel");
+  const sel = selEl ? selEl.dataset.name : "";
+  let paths = "";
+  netEdges().forEach(({a,b})=>{
+    const A = pos[a], B = pos[b];
+    if(!A || !B) return;
+    const lit = isLit(a) && isLit(b);
+    const focus = !!sel && (a===sel || b===sel);
+    const dx = B.x - A.x, dy = B.y - A.y;
+    let cx, cy;
+    if(Math.abs(dx) < 12){ cx = A.x + 30; cy = (A.y + B.y) / 2; }
+    else { cx = (A.x + B.x) / 2; cy = (A.y + B.y) / 2 - Math.min(30, Math.abs(dy)*0.4) - 8; }
+    const stroke = focus ? "#2196F3" : (lit ? "#4CAF50" : "#AFC4BF");
+    const w = focus ? 2.2 : (lit ? 1.6 : 1.1);
+    const dash = focus ? "none" : "3 4";
+    paths += `<path d="M ${A.x.toFixed(1)} ${A.y.toFixed(1)} Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${B.x.toFixed(1)} ${B.y.toFixed(1)}"
+      fill="none" stroke="${stroke}" stroke-width="${w}"
+      stroke-dasharray="${dash}" stroke-linecap="round" opacity="${focus?1:(lit?1:.9)}"/>`;
+  });
+  svg.innerHTML = paths;
+}
+
+renderStudent();
+
+window.addEventListener("hn-db-updated", renderStudent);
+window.addEventListener("storage", e=>{
+  if(e.key === LS_GAMES || e.key === LS_KEY) renderStudent();
+});
+</script>
+
+<style>
+  .mode-cards{display:flex;flex-direction:column;gap:12px}
+  .mode-card{
+    display:flex;align-items:center;gap:14px;padding:15px 16px;border:1px solid var(--line);
+    border-radius:var(--radius-lg);background:var(--surface-2);transition:all var(--dur) var(--ease);
+  }
+  .mode-card:hover{transform:translateY(-3px);border-color:rgba(76,175,80,.4);background:var(--surface);
+    box-shadow:var(--shadow-lg),var(--glow-sm)}
+  .mode-card .mi{
+    width:42px;height:42px;flex:0 0 42px;border-radius:13px;background:var(--accent-soft);color:var(--accent-ink);
+    display:flex;align-items:center;justify-content:center;transition:all var(--dur) var(--ease);
+  }
+  .mode-card .mi svg{width:22px;height:22px}
+  .mode-card:hover .mi{background:var(--grad);color:#fff;transform:rotate(-4deg) scale(1.04)}
+  .mode-card .mb{min-width:0;flex:1}
+  .mode-card .mt{font-size:16px;font-weight:800;color:var(--ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .mode-card .tag{font-size:11px;font-weight:600;color:var(--ink-3);border:1px solid var(--line);border-radius:99px;padding:1px 8px;background:var(--surface)}
+  .mode-card .md{font-size:13px;color:var(--ink-2);line-height:1.65;margin-top:4px}
+  .mode-card .arrow{color:var(--ink-3);font-size:18px;transition:all var(--dur) var(--ease)}
+  .mode-card:hover .arrow{color:var(--accent-ink);transform:translateX(4px)}
+  .recent-row.head{background:var(--surface-3);color:var(--ink-2);font-weight:700;font-size:12.5px;pointer-events:none;border-color:transparent}
+  .recent-row.head:hover{transform:none;box-shadow:none}
+  .hero .info h1{font-size:30px}
+
+  /* 成绩分析卡：右侧与「最近游戏情况」等高，雷达自适应剩余空间 */
+  .home-main{align-items:stretch}
+  .home-side{display:flex;flex-direction:column;gap:20px;min-width:0;align-self:stretch}
+  .ps-card{display:flex;flex-direction:column;flex:1;min-height:0;padding:20px 24px}
+  .ps-basis{
+    margin-left:auto;font-size:11.5px;font-weight:600;color:var(--ink-3);
+    border:1px solid var(--line);border-radius:99px;padding:2px 9px;background:var(--surface-2);
+  }
+  .ps-radar-wrap{flex:1;min-height:190px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .ps-radar{width:100%;height:100%;max-width:360px;max-height:100%}
+  .ps-radar .pt{transition:r .2s var(--ease)}
+  .ps-radar circle:hover{stroke:#2196F3;stroke-width:1.5}
+  .ps-empty{
+    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;gap:8px;min-height:170px;padding:18px 8px;font-size:13.5px;color:var(--ink-3);
+  }
+  .ps-empty b{font-size:15px;color:var(--ink)}
+  .ps-empty span{max-width:330px;line-height:1.7}
+  .ps-empty .btn{margin-top:4px}
+  @media (max-width:1100px){
+    .hero .stats .stat{min-width:84px;padding:0 12px}
+    .hero .stats .stat .n{font-size:30px}
+  }
+</style>
+</body>
+</html>

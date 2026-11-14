@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>历史关联网 · 教师首页</title>
+<link rel="stylesheet" href="shared.css?v=20261111">
+</head>
+<body>
+<div id="topnav-root"></div>
+<div class="page" id="page"></div>
+
+<!-- 添加学生弹窗 -->
+<div class="modal-mask" id="pickMask">
+  <div class="modal" style="width:min(560px,92vw)">
+    <div class="modal-head"><h3 id="pickTitle">添加学生</h3><div class="spacer"></div><button class="close" onclick="closePick()">取消</button></div>
+    <div id="pickBody" style="padding:14px 18px;max-height:52vh;overflow:auto"></div>
+    <div style="padding:14px 22px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="closePick()">取消</button>
+      <button class="btn primary" onclick="confirmPick()">确认添加</button>
+    </div>
+  </div>
+</div>
+
+<script src="accounts.js?v=20261111"></script>
+<script src="shared.js?v=20261111"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="data/kb-data.js?v=20261111"></script>
+<script src="data/db.js?v=20261111"></script>
+<script>
+requireAccount();
+const user = getUser();
+if(user.role!=="t" && user.role!=="a"){ location.href = "home_student.html"; }
+document.getElementById("topnav-root").outerHTML = renderTopnav("home");
+
+const page = document.getElementById("page");
+const prof = profile();
+const NET_DYNS = HNDB.eraOrder();
+const NET_DYN_SHORT = { "三国两晋南北朝":"三国·两晋", "外国近现代":"外国·近现代" };
+
+requestAnimationFrame(drawNetLinks);
+window.addEventListener("resize", drawNetLinks);
+
+/* 头像 HTML */
+function avatarHTML(u, cls){
+  return u.avatar ? `<img src="${u.avatar}" alt="${u.name}">` : (u.name||"?")[0];
+}
+
+/* ============================================================
+   教师中心：班级 + 出练习纸 + 学生学情 + 自己的关系网
+============================================================ */
+let teacherTab = "all";        // 当前查看的班级
+let teacherSort = "scoreDesc"; // 排序方式
+
+/* 所带班级1（账号信息表中的班级）自动出现在「我的班级」里 */
+function ensureAssignedClass(){
+  if(!user.cls) return;
+  const classes = loadClasses();
+  if(!classes.some(c=> c.name===user.cls)){
+    classes.unshift({ id:1, name:user.cls, code:makeClassCode(), members:[], assigned:true });
+    saveClasses(classes);
+  }
+}
+
+function renderTeacher(){
+  ensureAssignedClass();
+  const classes = loadClasses();
+  const scores = loadScores();
+  const totalStudents = new Set(classes.flatMap(c=>c.members)).size;
+  const lit = Object.keys(prof.done||{}).length;
+
+  page.innerHTML = `
+  <div class="hero reveal">
+    <div class="avatar">${avatarHTML(user)}</div>
+    <div class="info">
+      <h1>${user.name}</h1>
+      <div class="sub">${ROLE_LABELS[user.role]||"老师"}${user.cls?" · "+user.cls:""}${user.no?" · 工号 "+user.no:""}</div>
+      <div class="row" style="margin-top:14px">
+        <a class="btn primary" href="exam.html">出练习卷</a>
+        <a class="btn ghost" href="lobby.html?mode=single">我的网（测试）</a>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n"><span data-count="${classes.length}">0</span></div><div class="l">我的班级</div></div>
+      <div class="stat"><div class="n"><span data-count="${totalStudents}">0</span></div><div class="l">班级学生</div></div>
+      <div class="stat"><div class="n"><span data-count="${lit}">0</span><span class="of">/${DB.length}</span></div><div class="l">我的掌握情况</div></div>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-bottom:20px">
+    <div class="card reveal" style="--i:1">
+      <div class="section-title">快速操作</div>
+      <div class="quick-actions">
+        <button class="qa-row b1" onclick="quickAddStudent()">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9.5" cy="8" r="3.4"/><path d="M3.5 20c0-3.3 2.7-5.6 6-5.6s6 2.3 6 5.6"/><path d="M18 8v6M15 11h6"/></svg></span>
+          <span>添加学生</span>
+          <span class="ar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+        </button>
+        <button class="qa-row b4" onclick="location.href='exam.html'">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.5h8l4.5 4.5v14.5H6z"/><path d="M14 2.5V7h4.5"/><path d="M9 13h6M9 17h4"/></svg></span>
+          <span>出练习卷</span>
+          <span class="ar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+        </button>
+        <button class="qa-row b3" onclick="location.href='score_analysis.html'">
+          <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M12 3v9h9"/></svg></span>
+          <span>成绩分析</span>
+          <span class="ar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>
+        </button>
+      </div>
+
+    </div>
+    <div class="card reveal" style="--i:2">
+      <div class="section-title">出练习纸</div>
+      <div class="feature-box">
+        <div class="fi">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v6h6"/><path d="M9 13h7M9 17h5"/></svg>
+        </div>
+        <div>
+          <div class="ft">逐题生成练习卷</div>
+          <div class="fd">勾选人物、选择题型，自动排版成 A4 练习卷，第二页附教师答案页，支持直接打印。</div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <a class="btn primary large" href="exam.html">创建练习卷</a>
+        <a class="btn ghost large" href="lobby.html?mode=single">我的关系网</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="card reveal" style="margin-bottom:20px;--i:3">
+    <div class="section-title">班级学生情况</div>
+    ${renderStuSection(classes, scores)}
+  </div>
+
+  <div class="card reveal" style="--i:4">
+    ${renderNet()}
+    <div style="font-size:13.5px;color:var(--ink-3);margin-top:10px">教师的关系网用于单机测试，只看掌握情况，不记分。</div>
+  </div>`;
+  requestAnimationFrame(()=>{ drawNetLinks(); mountMotion(page); });
+}
+
+function renderClassList(classes){
+  if(!classes.length) return `<div class="empty-tip">还没有班级。建一个，把班级码发给学生。</div>`;
+  return classes.map(c=>{
+    const sc = loadScores();
+    const avg = c.members.length ? Math.round(c.members.reduce((s,no)=> s+(sc[no]?.score||0),0)/c.members.length) : 0;
+    return `<div class="class-item">
+      <div style="flex:1">
+        <div class="cname">${c.name}${c.assigned?` <span class="chip" style="font-size:12px;padding:1px 8px">所带班级</span>`:""}</div>
+        <div class="cmeta">${c.members.length} 人 · 平均 ${avg} 分 · 班级码 <code>${c.code}</code></div>
+      </div>
+      <button class="btn ghost" onclick="openPick(${c.id})">添加学生</button>
+    </div>`;
+  }).join("");
+}
+
+function quickAddStudent(){
+  const classes = loadClasses();
+  if(!classes.length){
+    if(confirm("还没有班级。先去「创建班级」建一个吗？")) location.href = "class_create.html";
+    return;
+  }
+  openPick(classes[0].id);
+}
+
+/* 班级数据以 localStorage 为准：其它页面（创建班级页 / 学生管理页）创建或删除班级后，这里跟着刷新 */
+window.addEventListener("storage", function(e){ if(e.key === LS_CLASSES && user.role === "t") renderTeacher(); });
+window.addEventListener("pageshow", function(e){ if(e.persisted && user.role === "t") renderTeacher(); });
+
+/* ---- 添加学生弹窗 ---- */
+let pickClassId = null;
+function openPick(cid){
+  pickClassId = cid;
+  const classes = loadClasses();
+  const cls = classes.find(c=>c.id===cid);
+  const inClass = new Set(cls.members);
+  const candidates = allAccounts("s").filter(a=> !inClass.has(a.id));
+  document.getElementById("pickTitle").textContent = `添加学生到「${cls.name}」`;
+  document.getElementById("pickBody").innerHTML = candidates.length ?
+    candidates.map(a=>`<label style="display:flex;align-items:center;gap:10px;padding:8px 6px;border-bottom:1px solid var(--line);cursor:pointer;font-size:15px">
+      <input type="checkbox" class="pickChk" value="${a.id}">
+      <span style="font-weight:600">${a.name}</span><span style="color:var(--ink-3)">${a.id}</span>
+      <span style="color:var(--ink-3);margin-left:auto">${a.cls||""}</span>
+    </label>`).join("")
+    : `<div class="empty-tip">账号表中没有可添加的学生了。</div>`;
+  document.getElementById("pickMask").classList.add("on");
+}
+function closePick(){ document.getElementById("pickMask").classList.remove("on"); }
+function confirmPick(){
+  const ids = [...document.querySelectorAll(".pickChk:checked")].map(c=>c.value);
+  if(ids.length){
+    const classes = loadClasses();
+    const cls = classes.find(c=>c.id===pickClassId);
+    ids.forEach(id=>{ if(!cls.members.includes(id)) cls.members.push(id); });
+    saveClasses(classes);
+  }
+  closePick(); renderTeacher();
+}
+
+/* ---- 学生学情表 ---- */
+function renderStuSection(classes, scores){
+  const tabs = `<div class="tabs">
+    <div class="tab ${teacherTab==="all"?"on":""}" onclick="setTeacherTab('all')">全部学生</div>
+    ${classes.map(c=>`<div class="tab ${teacherTab===String(c.id)?"on":""}" onclick="setTeacherTab('${c.id}')">${c.name}</div>`).join("")}
+  </div>`;
+  const sortBar = `<div class="sort-bar">
+    <span class="lbl">排序：</span>
+    <button class="sort-btn ${teacherSort==="id"?"on":""}" onclick="setTeacherSort('id')">按学号</button>
+    <button class="sort-btn ${teacherSort==="scoreAsc"?"on":""}" onclick="setTeacherSort('scoreAsc')">分数升序</button>
+    <button class="sort-btn ${teacherSort==="scoreDesc"?"on":""}" onclick="setTeacherSort('scoreDesc')">分数降序</button>
+  </div>`;
+  const rows = stuRows(classes, scores);
+  const table = rows.length ? `<div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th>排名</th><th>姓名</th><th>学号</th><th>班级</th><th class="num">最高关卡</th><th class="num">累计积分</th><th class="num">掌握人数</th><th>最近学习</th></tr></thead>
+    <tbody>${rows.map((r,i)=>`<tr>
+      <td class="rank">${i+1}</td><td><b>${r.name}</b></td><td class="num">${r.no}</td><td>${r.cls}</td>
+      <td class="num">Lv ${r.best}</td><td class="num sc">${r.score}</td><td class="num">${r.done}/${DB.length}</td><td>${r.last}</td>
+    </tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty-tip">还没有学生。到「学生管理」用「+ 添加学生」把账号加入班级，或先建一个班级。</div>`;
+  return tabs + sortBar + table;
+}
+function setTeacherTab(t){ teacherTab=t; renderTeacher(); }
+function setTeacherSort(s){ teacherSort=s; renderTeacher(); }
+function stuRows(classes, scores){
+  let members;
+  if(teacherTab==="all"){
+    const set = new Set(); classes.forEach(c=> c.members.forEach(m=> set.add(m)));
+    members = [...set];
+  } else {
+    const cls = classes.find(c=> String(c.id)===teacherTab);
+    members = cls ? cls.members : [];
+  }
+  let rows = members.map(no=>{
+    const acc = findStudent(no) || {name:"?", cls:""};
+    const s = scores[no] || {};
+    return { no, name:acc.name, cls:acc.cls||"—", best:s.bestLevel||1, score:s.score||0, done:s.doneCount||0, last:s.lastDate||"—" };
+  });
+  if(teacherSort==="id") rows.sort((a,b)=> a.no.localeCompare(b.no));
+  else if(teacherSort==="scoreAsc") rows.sort((a,b)=> a.score-b.score);
+  else rows.sort((a,b)=> b.score-a.score);
+  return rows;
+}
+
+/* ============================================================
+   管理员中心：添加账号 + 查看学生记录
+============================================================ */
+let admMsg = "";
+function teacherCls2(id){
+  const map = (loadExtra().tCls)||{};
+  return (map[id]||[]).join("、");
+}
+function renderAdmin(){
+  const counts = { s:allAccounts("s").length, t:allAccounts("t").length, a:allAccounts("a").length };
+  const scores = loadScores();
+  const students = allAccounts("s");
+
+  page.innerHTML = `
+  <div class="hero reveal">
+    <div class="avatar">${avatarHTML(user)}</div>
+    <div class="info">
+      <h1>${user.name}</h1>
+      <div class="sub">管理员${user.no?" · 账号 "+user.no:""}</div>
+      <div class="row" style="margin-top:14px">
+        <a class="btn primary" href="kb_admin.html">人物库管理</a>
+      </div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n"><span data-count="${counts.s}">0</span></div><div class="l">学生账号</div></div>
+      <div class="stat"><div class="n"><span data-count="${counts.t}">0</span></div><div class="l">教师账号</div></div>
+      <div class="stat"><div class="n"><span data-count="${counts.a}">0</span></div><div class="l">管理员账号</div></div>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-bottom:20px">
+    <div class="card reveal" style="--i:1">
+      <div class="section-title">添加账号</div>
+      ${admMsg? `<div style="font-size:14px;color:var(--accent-ink);background:var(--accent-soft);border:1px solid rgba(76,175,80,.35);border-radius:10px;padding:8px 12px;margin-bottom:12px">${admMsg}</div>`:""}
+      <div class="mini-form">
+        <div class="field"><label>角色</label>
+          <select id="admRole" onchange="admRoleChange()">
+            <option value="s">学生</option><option value="t">老师</option><option value="a">管理员</option>
+          </select>
+        </div>
+        <div class="field"><label id="admIdLabel">学号</label><input id="admId" maxlength="30"></div>
+        <div class="field"><label>姓名</label><input id="admName" maxlength="20"></div>
+        <div class="field"><label>密码</label><input id="admPw" maxlength="30"></div>
+        <div class="field" id="admClsWrap" style="grid-column:1/-1"><label id="admClsLabel">班级</label><input id="admCls" maxlength="30" placeholder="如：2026级（11）班"></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn primary" onclick="adminAdd()">提交并保存到账号信息表</button>
+        <button class="btn ghost" onclick="exportAccounts()">导出账号表 CSV</button>
+      </div>
+    </div>
+    <div class="card reveal" style="--i:2">
+      <div class="section-title">账号信息表（共 ${counts.s+counts.t+counts.a} 个）</div>
+      <div class="tbl-wrap" style="max-height:340px;overflow:auto">
+        <table class="tbl" style="min-width:0">
+          <thead><tr><th>角色</th><th>账号</th><th>姓名</th><th>班级 / 所带班级1</th><th>所带班级2</th></tr></thead>
+          <tbody>${
+            ["s","t","a"].flatMap(r=> allAccounts(r).map(a=>
+              `<tr><td>${ROLE_LABELS[r]}</td><td class="num">${a.id}</td><td><b>${a.name}</b></td><td>${a.cls||"—"}</td><td>${r==="t"?(teacherCls2(a.id)||"—"):"—"}</td></tr>`
+            )).join("")
+          }</tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card reveal" style="--i:3">
+    <div class="section-title">所有学生记录</div>
+    ${students.length ? `<div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>学号</th><th>姓名</th><th>班级</th><th class="num">累计积分</th><th class="num">最高关卡</th><th class="num">掌握人数</th><th>最近学习</th></tr></thead>
+      <tbody>${students.map(a=>{
+        const s = scores[a.id]||{};
+        return `<tr><td class="num">${a.id}</td><td><b>${a.name}</b></td><td>${a.cls||"—"}</td>
+          <td class="num sc">${s.score||0}</td><td class="num">Lv ${s.bestLevel||1}</td>
+          <td class="num">${s.doneCount||0}/${DB.length}</td><td>${s.lastDate||"—"}</td></tr>`;
+      }).join("")}</tbody></table></div>` : `<div class="empty-tip">账号表中还没有学生。</div>`}
+  </div>`;
+  requestAnimationFrame(()=> mountMotion(page));
+}
+
+function admRoleChange(){
+  const r = document.getElementById("admRole").value;
+  document.getElementById("admIdLabel").textContent = ROLE_FIELD[r];
+  const showCls = (r==="s" || r==="t");
+  document.getElementById("admClsWrap").style.display = showCls ? "" : "none";
+  document.getElementById("admClsLabel").textContent = r==="t" ? "所带班级1" : "班级";
+}
+function adminAdd(){
+  const r = document.getElementById("admRole").value;
+  const id = document.getElementById("admId").value.trim();
+  const name = document.getElementById("admName").value.trim();
+  const pw = document.getElementById("admPw").value;
+  const cls = document.getElementById("admCls").value.trim();
+  admMsg = "";
+  if(!id || !name || !pw){ admMsg = "！ 账号、姓名、密码均不能为空"; renderAdmin(); return; }
+  if(allAccounts(r).some(a=> a.id.toLowerCase()===id.toLowerCase())){ admMsg = `！ ${ROLE_FIELD[r]}「${id}」已存在`; renderAdmin(); return; }
+  const x = loadExtra(); x[r] = x[r]||[];
+  x[r].push({ id, name, pw, group:ROLE_LABELS[r], cls:(r==="s"||r==="t")?cls:"", avatar:"" });
+  saveExtra(x);
+  admMsg = `✓ 已添加${ROLE_LABELS[r]}「${name}（${id}）」，已保存到账号信息表（本机）`;
+  renderAdmin();
+}
+function exportAccounts(){
+  const rows = [["角色","账号","姓名","密码","班级 / 所带班级1","所带班级2"]];
+  ["s","t","a"].forEach(r=> allAccounts(r).forEach(a=>
+    rows.push([ROLE_LABELS[r], a.id, a.name, effectivePw(r, a.id, a.pw), a.cls||"", r==="t"?teacherCls2(a.id):""])));
+  const csv = "\uFEFF" + rows.map(r=> r.map(c=> `"${String(c).replace(/"/g,'""')}"`).join(",")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv"}));
+  a.download = "账号信息表_导出.csv";
+  a.click();
+}
+
+/* ============================================================
+   关系网（教师 / 管理员共用）
+============================================================ */
+function netEdges(){
+  const names = new Set(DB.map(p=>p.name));
+  const seen = new Set(), edges = [];
+  DB.forEach(p=> (p.lore||[]).forEach(l=>{
+    if(!names.has(l.b)) return;
+    const k = [p.name, l.b].sort().join("|");
+    if(seen.has(k)) return;
+    seen.add(k);
+    edges.push({ a:p.name, b:l.b });
+  }));
+  return edges;
+}
+function isLit(name){ return ((prof.done||{})[personKey(name)]||0) > 0; }
+
+function netDegree(edges){
+  const d = {};
+  edges.forEach(e=>{ d[e.a]=(d[e.a]||0)+1; d[e.b]=(d[e.b]||0)+1; });
+  return d;
+}
+
+function renderNet(){
+  const edges = netEdges();
+  const deg = netDegree(edges);
+  const litPeople = DB.filter(p=>isLit(p.name)).length;
+
+  const cols = [];
+  const vis = new Set();
+  NET_DYNS.forEach(dyn=>{
+    const people = DB.filter(p=> p.dyn===dyn).slice()
+      .sort((a,b)=> (isLit(b.name)?1:0)-(isLit(a.name)?1:0)
+        || (deg[b.name]||0)-(deg[a.name]||0)
+        || ((a.no||0)-(b.no||0)))
+      .slice(0, NET_COL_MAX);
+    if(!people.length) return;
+    people.forEach(p=> vis.add(p.name));
+    cols.push({ dyn, people });
+  });
+  const visEdges = edges.filter(e=> vis.has(e.a) && vis.has(e.b)).length;
+
+  let html = `<div class="net-head">
+    <div class="t">关系网</div>
+    <div class="st">已点亮 <b>${litPeople}</b> / ${DB.length} 人 · 当前可见连线 <b>${visEdges}</b> 条 / 全库 ${edges.length} 条 · 每列至多 ${NET_COL_MAX} 人</div>
+  </div>
+  <div class="net-scroll"><div class="net-stage" id="netStage">
+    <svg class="net-links" id="netLinks"></svg>
+    <div class="net-cols">`;
+
+  cols.forEach(({dyn, people})=>{
+    html += `<div class="net-col"><div class="line"></div>
+      <div class="era">${NET_DYN_SHORT[dyn]||dyn}</div>
+      <div class="nodes">`;
+    people.forEach(p=>{
+      html += `<div class="net-node${isLit(p.name)?" lit":""}" data-name="${p.name}" onclick="selectNetPerson('${p.name}')">${p.name}</div>`;
+    });
+    html += `</div></div>`;
+  });
+
+  html += `</div></div></div>
+  <div class="net-tip" id="netTip">点一个人，看他在这张网里的位置。</div>`;
+  return html;
+}
+
+function netDetailHTML(name){
+  const p = DB.find(x=> x.name===name);
+  if(!p) return "点一个人，看他在这张网里的位置。";
+  const tags = [p.dyn];
+  if(p.caliber) tags.push("字/号 " + p.caliber);
+  const links = (p.lore||[]).map(l=>{
+    const lit = isLit(name) && isLit(l.b);
+    return `连线：<b>${l.b}</b>（${l.text}）<em class="${lit?"lit":""}">${lit?"已点亮":"未点亮"}</em>`;
+  }).join("<br>");
+  return `<div class="nd-head"><b>${p.name}</b>${tags.map(t=>`<span>${t}</span>`).join("")}</div>
+    <div class="nd-desc">${p.event} · 作品：${p.work}</div>
+    <div class="nd-links">${links || "暂无可连线的人物"}</div>`;
+}
+
+function selectNetPerson(name){
+  document.querySelectorAll(".net-node").forEach(el=> el.classList.toggle("sel", el.dataset.name===name));
+  document.getElementById("netTip").innerHTML = netDetailHTML(name);
+  drawNetLinks();
+}
+
+function drawNetLinks(){
+  const stage = document.getElementById("netStage");
+  const svg = document.getElementById("netLinks");
+  if(!stage || !svg) return;
+  const sr = stage.getBoundingClientRect();
+  if(!sr.width || !sr.height) return;
+  svg.setAttribute("viewBox", `0 0 ${sr.width} ${sr.height}`);
+  const pos = {};
+  stage.querySelectorAll(".net-node").forEach(n=>{
+    const r = n.getBoundingClientRect();
+    pos[n.dataset.name] = { x: r.left - sr.left + r.width/2, y: r.top - sr.top + r.height/2 };
+  });
+  const selEl = stage.querySelector(".net-node.sel");
+  const sel = selEl ? selEl.dataset.name : "";
+  let paths = "";
+  netEdges().forEach(({a,b})=>{
+    const A = pos[a], B = pos[b];
+    if(!A || !B) return;
+    const lit = isLit(a) && isLit(b);
+    const focus = !!sel && (a===sel || b===sel);
+    const dx = B.x - A.x, dy = B.y - A.y;
+    let cx, cy;
+    if(Math.abs(dx) < 12){ cx = A.x + 30; cy = (A.y + B.y) / 2; }
+    else { cx = (A.x + B.x) / 2; cy = (A.y + B.y) / 2 - Math.min(30, Math.abs(dy)*0.4) - 8; }
+    const stroke = focus ? "#2196F3" : (lit ? "#4CAF50" : "#AFC4BF");
+    const w = focus ? 2.2 : (lit ? 1.6 : 1.1);
+    const dash = focus ? "none" : "3 4";
+    paths += `<path d="M ${A.x.toFixed(1)} ${A.y.toFixed(1)} Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${B.x.toFixed(1)} ${B.y.toFixed(1)}"
+      fill="none" stroke="${stroke}" stroke-width="${w}"
+      stroke-dasharray="${dash}" stroke-linecap="round" opacity="${focus?1:(lit?1:.9)}"/>`;
+  });
+  svg.innerHTML = paths;
+}
+
+/* 分流渲染（放在所有声明之后，避免 let 的 TDZ） */
+if(user.role==="t") renderTeacher();
+else if(user.role==="a") renderAdmin();
+
+/* 数据源异步升级（xlsx 直读完成）后重绘 */
+window.addEventListener("hn-db-updated", () => {
+  if(user.role==="t") renderTeacher();
+  else if(user.role==="a") renderAdmin();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>人物库 · 编辑与统计 · 历史关联网</title>
+<link rel="stylesheet" href="shared.css?v=20261111">
+<style>
+  /* 仅本页微调：让列表/统计在 1366 宽度下仍保持一屏可读 */
+  .adm-card .stats-grid{gap:18px 26px}
+  .list-wrap{max-height:560px}
+  .adm-hero h1{font-size:28px}
+  .status-card{padding:16px 20px}
+  .adm-note{flex:1 1 100%;margin-top:4px;font-size:13px;line-height:1.7;color:var(--ink-2)}
+  .adm-note b{color:var(--ink)}
+  .adm-form.is-new{border-color:rgba(76,175,80,.5);box-shadow:0 0 0 3px rgba(76,175,80,.12)}
+  .adm-form .invalid{border-color:#e5484d!important;box-shadow:0 0 0 3px rgba(229,72,77,.14)!important}
+  .save-note{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--ink-3);margin-top:10px;line-height:1.6}
+  .save-note span{flex:1 1 200px;min-width:0}
+  table.plist tr.row-flash{background:rgba(76,175,80,.16);box-shadow:inset 3px 0 0 var(--brand)}
+  @media (max-width:980px){ .list-wrap{max-height:420px} }
+</style>
+</head>
+<body>
+<div id="topnav-root"></div>
+<div class="page">
+
+  <div class="adm-hero">
+    <div>
+      <h1 class="page-title">人物库 · 编辑与统计</h1>
+      <div class="sub">数据源：<code>历史人物知识库.xlsx</code>（645 条原始记录）· 网页端修改先存本机，可一键导出回写</div>
+    </div>
+    <div class="adm-bar">
+      <button class="btn ghost small" id="btnReload">重新读取 xlsx</button>
+      <button class="btn ghost small" id="btnJson">导出 JSON</button>
+      <button class="btn primary small" id="btnXlsx">导出 xlsx</button>
+      <button class="btn ghost small" id="btnReset">清空本地修改</button>
+      <button class="btn primary small" onclick="openNew()">＋ 新增人物</button>
+    </div>
+  </div>
+
+  <div class="adm-card status-card" style="margin-bottom:20px">
+    <div class="adm-status" id="dbStatus"></div>
+  </div>
+
+  <div class="adm-card reveal" style="margin-bottom:20px">
+    <h2>分布统计（实时由数据源计算）</h2>
+    <div class="stats-grid" id="statsBox"></div>
+  </div>
+
+  <div class="adm-grid">
+    <div class="adm-card reveal" style="--i:1">
+      <h2>人物列表 <span id="listCount" style="font-weight:400;color:var(--ink-3);font-size:13.5px"></span></h2>
+      <div class="filters">
+        <input id="kw" type="search" placeholder="搜索姓名 / 作品 / 出处…">
+        <select id="fStage"><option value="">全部学段</option></select>
+        <select id="fDyn"><option value="">全部朝代</option></select>
+        <select id="fIdt"><option value="">全部身份</option></select>
+      </div>
+      <div class="list-wrap">
+        <table class="plist">
+          <thead><tr><th>姓名</th><th>朝代</th><th>学段</th><th>身份</th><th>出处</th></tr></thead>
+          <tbody id="listBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="adm-card adm-form reveal" id="formCard" style="--i:2">
+      <h2 id="formTitle">选择一条记录进行编辑</h2>
+      <div id="formBody"><div class="empty">左侧点击任意人物，即可在网页上修改并保存到本机。</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="accounts.js?v=20261111"></script>
+<script src="shared.js?v=20261111"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="data/kb-data.js?v=20261111"></script>
+<script src="data/db.js?v=20261111"></script>
+<script>
+requireAccount();
+const user = getUser();
+if(user.role!=="t" && user.role!=="a"){ location.href = "home_student.html"; }
+document.getElementById("topnav-root").outerHTML = renderTopnav("data");
+
+const EDITABLE = [
+  ["ziHao","字/号"],["dynasty","朝代/时期"],["identity","身份领域"],
+  ["event","代表事件/成就"],["work","代表作品"],["intro","人物简介"],
+  ["note","易错辨析/考点"],["sourceType","出处类型"],["stage","学段"],["sourceDetail","出处明细"]
+];
+let curKey = null;          // 当前编辑记录的主键（原始姓名）
+let pendingNew = false;     // 是否在新增模式
+
+function toast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("on");
+  clearTimeout(t._h); t._h = setTimeout(()=> t.classList.remove("on"), 1800);
+}
+
+/* ---------- 顶部状态 ---------- */
+function renderStatus(){
+  const info = HNDB.info();
+  const mode = info.mode === "xlsx"
+    ? `<span class="badge ok">数据源：xlsx 直读（网页修改仅存本机，需导出 xlsx 回写）</span>`
+    : `<span class="badge warn">数据源：本地快照 kb-data.js（file:// 打开时使用，网页修改仅存本机）</span>`;
+  document.getElementById("dbStatus").innerHTML =
+    mode +
+    `<span class="badge">共 <b>${info.count}</b> 位人物</span>` +
+    (info.sourceMtime ? `<span class="badge">xlsx 修改时间 <b>${info.sourceMtime}</b></span>` : "") +
+    (info.generatedAt ? `<span class="badge">快照生成 <b>${info.generatedAt}</b></span>` : "") +
+    `<span class="badge ${info.hasEdits?"warn":""}">本地修改：<b>${info.hasEdits ? "有（仅存本机）" : "无"}</b></span>` +
+    `<div class="adm-note">网页端新增 / 修改会先保存在<b>本浏览器</b>，不会直接改动 xlsx 原文件。要让导出结果包含这些改动，请点右上角「导出 xlsx」下载后覆盖知识库文件。</div>`;
+}
+
+/* ---------- 统计 ---------- */
+function renderStats(){
+  const st = HNDB.stats();
+  const block = (title, arr, max) => {
+    const rows = (max ? arr.slice(0, max) : arr).map(x=>`
+      <div class="srow"><span class="k" title="${x.k}">${x.k}</span>
+        <span class="track"><span class="fill" style="width:${Math.min(100, x.pct)}%;display:block"></span></span>
+        <span class="n">${x.c} · ${x.pct.toFixed(1)}%</span></div>`).join("");
+    return `<div><h3>${title}</h3>${rows || `<div class="empty">暂无</div>`}</div>`;
+  };
+  document.getElementById("statsBox").innerHTML =
+    block("按学段（可多选计入）", st.stages) +
+    block("按朝代/时期", st.dynasties) +
+    block("按身份领域（前 12）", st.identities, 12) +
+    block("按出处类型", st.sources);
+}
+
+/* ---------- 下拉选项 ---------- */
+function fillFilters(){
+  const s = document.getElementById("fStage"), d = document.getElementById("fDyn"), i = document.getElementById("fIdt");
+  s.innerHTML = `<option value="">全部学段</option>` +
+    HNDB.stages().map(x=>`<option>${x}</option>`).join("");
+  d.innerHTML = `<option value="">全部朝代</option>` +
+    HNDB.eraOrder().map(x=>`<option>${x}</option>`).join("");
+  i.innerHTML = `<option value="">全部身份</option>` +
+    HNDB.identities().map(x=>`<option>${x}</option>`).join("");
+}
+
+/* ---------- 列表 ---------- */
+function currentFilters(){
+  return {
+    keyword: document.getElementById("kw").value,
+    stage: document.getElementById("fStage").value,
+    dynasty: document.getElementById("fDyn").value,
+    identity: document.getElementById("fIdt").value
+  };
+}
+function renderList(){
+  const rows = HNDB.all(currentFilters());
+  document.getElementById("listCount").textContent = `（${rows.length} / ${HNDB.all().length}）`;
+  document.getElementById("listBody").innerHTML = rows.map(p=>`
+    <tr data-name="${p.name}" class="${p.name===curKey?"on":""}">
+      <td class="nm">${p.name}${p.edited?'<span class="flag">已改</span>':""}${p.added?'<span class="flag add">新增</span>':""}</td>
+      <td title="${p.dyn}">${p.dyn}</td><td title="${p.stage}" style="white-space:nowrap">${p.stage.replace(/学/g,"")}</td>
+      <td class="cut" title="${p.identity}">${p.identity}</td>
+      <td class="cut" title="${p.sourceDetail}">${p.sourceDetail}</td>
+    </tr>`).join("") || `<tr><td colspan="5" class="empty">没有匹配的人物</td></tr>`;
+
+  document.querySelectorAll("#listBody tr[data-name]").forEach(tr=>{
+    tr.onclick = ()=> openEdit(tr.dataset.name);
+  });
+}
+
+/* ---------- 编辑表单 ---------- */
+function esc(v){ return String(v==null?"":v).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;"); }
+
+function openEdit(name){
+  const p = HNDB.get(name);
+  if(!p) return;
+  curKey = name; pendingNew = false;
+  document.getElementById("formCard").classList.remove("is-new");
+  document.getElementById("formTitle").textContent = `编辑：${p.name}`;
+  document.getElementById("formBody").innerHTML = formHTML(p, false);
+  bindForm();
+  renderList();
+}
+
+function openNew(){
+  curKey = null; pendingNew = true;
+  const card = document.getElementById("formCard");
+  document.getElementById("formTitle").textContent = "新增人物（填写后点「保存到本机」）";
+  document.getElementById("formBody").innerHTML = formHTML({}, true);
+  bindForm();
+  card.classList.add("is-new");
+  renderList();
+  // 编辑卡片在列表右侧、常位于首屏之外：滚到可见处并聚焦姓名，避免"点了没反应"
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  const nameEl = document.getElementById("fdName");
+  if(nameEl) setTimeout(()=> nameEl.focus({ preventScroll: true }), 260);
+}
+
+/* 让新增/编辑的记录在列表中可见：必要时清空筛选，并滚动+高亮该行 */
+function revealRow(name){
+  const tr = ()=> document.querySelector(`#listBody tr[data-name="${name.replace(/"/g,'\\"')}"]`);
+  let row = tr();
+  if(!row){
+    document.getElementById("kw").value = "";
+    document.getElementById("fStage").value = "";
+    document.getElementById("fDyn").value = "";
+    document.getElementById("fIdt").value = "";
+    renderList();
+    row = tr();
+  }
+  if(!row) return;
+  const wrap = document.querySelector(".list-wrap");
+  if(wrap) wrap.scrollTop = Math.max(0, row.offsetTop - wrap.clientHeight / 2 + row.offsetHeight / 2);
+  row.classList.add("row-flash");
+  setTimeout(()=> row.classList.remove("row-flash"), 1800);
+}
+
+function formHTML(p, isNew){
+  return `
+    <div class="field"><label>姓名（主键，需改名请改 xlsx）</label>
+      <input id="fdName" value="${esc(p.name||"")}" ${isNew?"":"readonly"} placeholder="如：孔子"></div>
+    ${EDITABLE.map(([k,label])=>`
+      <div class="field"><label>${label}</label>
+        <textarea id="fd_${k}" rows="${["event","intro","note","sourceDetail"].includes(k)?3:1}">${esc(p[k]||"")}</textarea>
+      </div>`).join("")}
+    <div class="form-foot">
+      <button class="btn primary small" id="btnSave">保存到本机</button>
+      ${isNew ? `<button class="btn ghost small" id="btnCancel">取消</button>`
+              : `<button class="btn ghost small danger" id="btnDel">删除</button>`}
+    </div>
+    <div class="save-note">
+      <span>保存仅写入本浏览器的 localStorage，不会改动 xlsx 原文件；确认无误后导出 xlsx 覆盖知识库文件。</span>
+      <button type="button" class="btn ghost small" id="btnExportNow">导出 xlsx 回写</button>
+    </div>`;
+}
+
+function bindForm(){
+  const save = document.getElementById("btnSave");
+  if(save) save.onclick = doSave;
+  const del = document.getElementById("btnDel");
+  if(del) del.onclick = ()=>{
+    if(!confirm(`确定删除「${curKey}」？（可从「清空本地修改」恢复）`)) return;
+    HNDB.removePerson(curKey); HNDB.refresh();
+    toast("已删除（仅本机）"); curKey = null;
+    document.getElementById("formTitle").textContent = "选择一条记录进行编辑";
+    document.getElementById("formBody").innerHTML = `<div class="empty">左侧点击任意人物，即可修改。</div>`;
+    renderStatus(); renderStats(); renderList();
+  };
+  const cancel = document.getElementById("btnCancel");
+  if(cancel) cancel.onclick = ()=>{
+    pendingNew = false;
+    document.getElementById("formCard").classList.remove("is-new");
+    document.getElementById("formTitle").textContent = "选择一条记录进行编辑";
+    document.getElementById("formBody").innerHTML = `<div class="empty">左侧点击任意人物，即可修改。</div>`;
+  };
+  const ex = document.getElementById("btnExportNow");
+  if(ex) ex.onclick = ()=>{ HNDB.exportXLSX(); toast("已导出 xlsx，用它覆盖知识库文件后即可全站生效"); };
+  document.querySelectorAll("#formBody input,#formBody textarea").forEach(el=>{
+    el.addEventListener("input", ()=> el.classList.remove("invalid"));
+  });
+}
+
+function readForm(){
+  const o = {};
+  EDITABLE.forEach(([k])=>{ o[k] = document.getElementById("fd_"+k).value.trim(); });
+  return o;
+}
+
+function markInvalid(el, msg){
+  toast(msg);
+  if(!el) return;
+  el.classList.add("invalid");
+  el.focus({ preventScroll: false });
+}
+
+function doSave(){
+  const patch = readForm();
+  if(pendingNew){
+    const nameEl = document.getElementById("fdName");
+    const name = nameEl.value.trim();
+    if(!name){ markInvalid(nameEl, "请填写姓名（必填）"); return; }
+    const dup = HNDB.get(name);
+    if(dup){ markInvalid(nameEl, `该姓名已存在（序号 ${dup.no}），请换名或直接在左侧编辑`); return; }
+    const dynEl = document.getElementById("fd_dynasty");
+    if(!dynEl.value.trim()){ markInvalid(dynEl, "请填写「朝代/时期」（统计与闯关分类依赖此列）"); return; }
+    const stageEl = document.getElementById("fd_stage");
+    if(!stageEl.value.trim()){ markInvalid(stageEl, "请填写「学段」（小学 / 初中 / 高中）"); return; }
+    // 带齐 12 列：除自动递增的序号外，所有字段都写入（缺省为空串）；姓名单独取，不能被 patch 覆盖
+    const rec = { name: name };
+    HNDB.fields.forEach(k=>{ if(k !== "no" && k !== "name") rec[k] = patch[k] || ""; });
+    HNDB.addPerson(rec);
+    pendingNew = false; curKey = name;
+    document.getElementById("formCard").classList.remove("is-new");
+    HNDB.refresh();
+    const added = HNDB.get(name);
+    toast(`已新增「${name}」· 序号 ${added ? added.no : "-"} · 已存本机，需导出 xlsx 回写`);
+    renderStatus(); renderStats(); renderList();
+    openEdit(curKey);
+    revealRow(name);
+  } else {
+    HNDB.saveEdit(curKey, patch);
+    toast(`已保存「${curKey}」（仅存本机，需导出 xlsx 回写）`);
+    HNDB.refresh();
+    renderStatus(); renderStats(); renderList();
+    openEdit(curKey);
+    revealRow(curKey);
+  }
+}
+
+/* ---------- 按钮 ---------- */
+document.getElementById("btnReload").onclick = ()=>{
+  HNDB.reload().then(ok=>{
+    if(ok){ toast("已从 xlsx 重新读取"); renderStatus(); renderStats(); renderList(); }
+    else { toast("读取失败：请用本地静态服务器打开，或运行 tools/xlsx2js.py"); }
+  });
+};
+document.getElementById("btnJson").onclick = ()=>{ HNDB.exportJSON(); toast("已导出 JSON"); };
+document.getElementById("btnXlsx").onclick = ()=>{ HNDB.exportXLSX(); toast("已导出 xlsx"); };
+document.getElementById("btnReset").onclick = ()=>{
+  if(!confirm("清空本浏览器内的所有修改，回到 xlsx 原始数据？")) return;
+  HNDB.resetEdits(); HNDB.refresh();
+  curKey = null; renderStatus(); renderStats(); renderList();
+  document.getElementById("formTitle").textContent = "选择一条记录进行编辑";
+  document.getElementById("formBody").innerHTML = `<div class="empty">左侧点击任意人物，即可修改。</div>`;
+  toast("已恢复为知识库原始数据");
+};
+
+document.getElementById("kw").oninput = renderList;
+["fStage","fDyn","fIdt"].forEach(id=> document.getElementById(id).onchange = renderList);
+
+/* ---------- 启动 ---------- */
+function boot(){
+  fillFilters(); renderStatus(); renderStats(); renderList();
+}
+boot();
+window.addEventListener("hn-db-updated", ()=>{ fillFilters(); renderStatus(); renderStats(); renderList(); });
+</script>
+</body>
+</html>

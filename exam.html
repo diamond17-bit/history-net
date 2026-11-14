@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>历史关联网 · 创建练习卷</title>
+<link rel="stylesheet" href="shared.css?v=20261111">
+</head>
+<body>
+<div id="topnav-root"></div>
+
+<div class="page">
+  <div class="page-head">
+    <a class="back-btn" href="home.html" title="返回个人中心">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </a>
+    <div>
+      <h1 class="page-title">新建练习卷</h1>
+      <div class="page-sub">勾选人物 → 添加题型 → 生成 A4 双页练习卷，第二页为教师答案页。</div>
+    </div>
+  </div>
+
+  <div class="card exam-panel">
+    <div class="exam-head">
+      <div class="name-row">
+        <span class="nr-label">试卷名称</span>
+        <input id="examName" value="历史关联网·关联练习" maxlength="30">
+        <div class="chip" id="examNameHint">共 645 条人物可选题</div>
+      </div>
+      <div class="exam-mech">
+        <span class="lbl">评分机制</span>
+        <label><input type="radio" name="examMode" value="pct" checked onchange="examModeChange('pct')"> 百分制（平均分配每道题的分值）</label>
+        <label><input type="radio" name="examMode" value="custom" onchange="examModeChange('custom')"> 自定义（每题
+          <input type="number" id="examPts" value="5" min="1" max="50" style="width:58px;height:30px;padding:0 8px;border:1px solid var(--line-2);border-radius:6px;font-size:14px"> 分）</label>
+      </div>
+      <div class="exam-dyns" id="examDyns"></div>
+    </div>
+    <div class="exam-body" style="border-top:1px solid var(--line);margin-top:4px">
+      <div class="exam-left">
+        <div class="exam-left-bar">
+          <span class="spacer" style="font-size:14px;color:var(--ink-3)">人物</span>
+          <button class="mini-btn" onclick="examSelAll()">全选</button>
+          <button class="mini-btn" onclick="examSelNone()">取消选择</button>
+        </div>
+        <div class="exam-people" id="examPeople"></div>
+        <div class="exam-count" id="examCount"></div>
+      </div>
+      <div class="exam-right">
+        <div class="exam-add">添加题目
+          <button onclick="examAdd('single')">单选题</button>
+          <button onclick="examAdd('fill')">填空题</button>
+          <button onclick="examAdd('match')">连线题</button>
+          <span id="examTip" style="font-size:13px;color:var(--danger)"></span>
+        </div>
+        <div class="exam-qs" id="examQs"></div>
+      </div>
+    </div>
+    <div style="padding:14px 24px 20px;display:flex;gap:10px;justify-content:flex-end;align-items:center;border-top:1px solid var(--line)">
+      <div class="chip" id="examFootHint" style="margin-right:auto">先在左侧勾选人物，再添加题型</div>
+      <button class="btn ghost" onclick="examClear()">清空题目</button>
+      <button class="btn primary" onclick="examGenerate()">生成练习卷</button>
+    </div>
+  </div>
+</div>
+
+<!-- A4 排版预览弹窗 -->
+<div class="modal-mask" id="a4Mask">
+  <div class="modal a4-modal">
+    <div class="modal-head">
+      <h3>练习卷预览（A4）</h3>
+      <div class="sum">共 2 页 · 第二页为教师答案页</div>
+      <button class="close" onclick="closeA4()">关闭</button>
+    </div>
+    <div class="a4-body" id="a4Body"></div>
+    <div style="padding:14px 22px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn ghost" onclick="closeA4()">返回编辑</button>
+      <button class="btn primary" onclick="doPrint()">打印练习卷</button>
+    </div>
+  </div>
+</div>
+
+<!-- 打印容器 -->
+<div id="printRoot" style="display:none"></div>
+
+<script src="accounts.js?v=20261111"></script>
+<script src="shared.js?v=20261111"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="data/kb-data.js?v=20261111"></script>
+<script src="data/db.js?v=20261111"></script>
+<script>
+requireAccount();
+const user = getUser();
+if(user.role!=="t" && user.role!=="a"){ location.href = "home_student.html"; }
+document.getElementById("topnav-root").outerHTML = renderTopnav("home");
+
+const NET_DYNS = HNDB.eraOrder();
+const NET_DYN_SHORT = { "三国两晋南北朝":"三国·两晋", "外国近现代":"外国·近现代", "五代十国":"五代十国" };
+
+/* 数据源异步升级后刷新人物列表 */
+window.addEventListener("hn-db-updated", () => {
+  renderExamDyns(); renderExamPeople(); renderExamQs();
+});
+
+function shortEvent(p){ return p.event.split(/[、，,]/)[0]; }
+function shortWork(p){ const m = p.work.match(/《[^》]+》/); return m ? m[0] : p.work; }
+
+let examSel = new Set();
+let examQs = [];
+let examMode = "pct";
+let examDyn = "全部";
+
+function examModeChange(m){ examMode = m; renderExamQs(); }
+
+function examDynList(){ return ["全部", ...NET_DYNS]; }
+function examPeople(){ return examDyn==="全部" ? DB : DB.filter(p=>p.dyn===examDyn); }
+function renderExamDyns(){
+  document.getElementById("examDyns").innerHTML = examDynList().map(d=>
+    `<button class="sort-btn ${examDyn===d?"on":""}" onclick="examSetDyn('${d}')">${NET_DYN_SHORT[d]||d}</button>`).join("");
+}
+function examSetDyn(d){ examDyn=d; renderExamDyns(); renderExamPeople(); }
+
+function renderExamPeople(){
+  document.getElementById("examPeople").innerHTML = examPeople().map(p=>`
+    <label><input type="checkbox" class="examChk" value="${p.name}" ${examSel.has(p.name)?"checked":""} onchange="examToggle('${p.name}',this.checked)">
+      <span class="pn">${p.name}</span><span class="pd">${p.dyn}</span></label>`).join("");
+  renderExamCount();
+}
+function examToggle(name,on){ on ? examSel.add(name) : examSel.delete(name); renderExamCount(); }
+function examSelAll(){ examPeople().forEach(p=>examSel.add(p.name)); renderExamPeople(); }
+function examSelNone(){ examSel.clear(); renderExamPeople(); }
+function examCount(){
+  const pts = examPerPts();
+  return { n: examQs.length, total: examQs.length * pts };
+}
+function examPerPts(){
+  if(examMode==="custom") return Math.max(1, +document.getElementById("examPts").value || 5);
+  return examQs.length ? Math.floor(100/examQs.length) : 0;
+}
+function renderExamCount(){
+  const c = examCount();
+  document.getElementById("examCount").innerHTML = `已选 <b>${examSel.size}</b> 人 · 题量 <b>${c.n}</b>，总分 <b>${examMode==="pct"&&c.n?100:c.total}</b>`;
+}
+
+function matchItems(sel){
+  // 朝代重复度高（多人同朝代会产生歧义），连线项只从 字/号/事件/作品 中取；
+  // 每人随机两项，但优先取还没用过的字段，使不同人的字段组合尽量不同（如孔子—事件/作品，墨子—字/号）
+  const used = {};
+  const items = [];
+  shuffle(sel).forEach(p=>{
+    const pool = [];
+    if(p.caliber) pool.push(["字／号", p.caliber]);
+    pool.push(["事件", shortEvent(p)], ["作品", shortWork(p)]);
+    shuffle(pool)
+      .sort((a,b)=> (used[a[0]]||0) - (used[b[0]]||0))   // 稳定排序：同频次内保持随机
+      .slice(0,2)
+      .forEach(x=>{ used[x[0]] = (used[x[0]]||0)+1; items.push({ t:`${x[0]}·${x[1]}`, who:p.name }); });
+  });
+  return shuffle(items);
+}
+
+function examAdd(type){
+  const sel = [...examSel].map(n=>DB.find(p=>p.name===n)).filter(Boolean);
+  const tip = document.getElementById("examTip");
+  if(!sel.length){ tip.textContent = "请先在左侧勾选人物"; return; }
+  if(type==="match" && sel.length<2){ tip.textContent = "连线题至少勾选 2 人"; return; }
+  tip.textContent = "";
+  if(type==="match"){
+    const names = sel.slice(0,10).map(x=>x.name);
+    const items = matchItems(sel.slice(0,10));
+    examQs.push({ type:"match", names, items });
+  } else if(type==="fill"){
+    sel.forEach(p=>{
+      const blanks = [];
+      if(p.caliber) blanks.push(["字／号", p.caliber]);
+      blanks.push(["朝代", p.dyn]);
+      examQs.push({ type:"fill", name:p.name, blanks, note:p.note });
+    });
+  } else {
+    sel.forEach(p=>{
+      const others = shuffle(DB.filter(x=>x.name!==p.name));
+      const t = Math.floor(Math.random()*3);
+      let stem, opts, ans;
+      if(t===0){
+        stem = `《${shortWork(p).replace(/[《》]/g,"")}》是谁的代表作？`;
+        ans = p.name; opts = shuffle([p.name, ...others.slice(0,3).map(x=>x.name)]);
+      } else if(t===1){
+        stem = `“${shortEvent(p)}”与下列哪位人物相关？`;
+        ans = p.name; opts = shuffle([p.name, ...others.slice(0,3).map(x=>x.name)]);
+      } else {
+        stem = `下列哪部作品出自${p.name}之手？`;
+        ans = shortWork(p); opts = shuffle([shortWork(p), ...others.slice(0,3).map(x=>shortWork(x))]);
+      }
+      examQs.push({ type:"single", name:p.name, stem, opts, ans, note:p.note });
+    });
+  }
+  renderExamQs();
+}
+function examDel(i){ examQs.splice(i,1); renderExamQs(); }
+function examClear(){ examQs = []; renderExamQs(); document.getElementById("examTip").textContent=""; }
+function examShowAns(i){ document.getElementById("qa"+i).style.display = "block"; }
+
+function renderExamQs(){
+  const pts = examPerPts();
+  const box = document.getElementById("examQs");
+  if(!examQs.length){
+    box.innerHTML = `<div class="empty-tip" style="padding:80px 0">先在左侧勾选人物，再点击题型按钮添加题目</div>`;
+  } else {
+    box.innerHTML = examQs.map((q,i)=>{
+      let body = "";
+      if(q.type==="single"){
+        body = `<div class="q-stem">${i+1}.（${q.name}）${q.stem}</div>` +
+          q.opts.map((o,j)=>`<div class="q-opt" data-ans="${o===q.ans?1:0}">${"ABCD"[j]}. ${o}</div>`).join("");
+      } else if(q.type==="fill"){
+        body = `<div class="q-stem">${i+1}.（${q.name}）${q.name}，${q.blanks.map(b=>`${b[0]} <u class="q-blank">　　</u>`).join("，")}。</div>`;
+      } else {
+        const LETTERS = "ABCDEFGHIJKLMNOPQRST";
+        body = `<div class="q-stem">${i+1}. 连线：把人物与对应的信息项用线连起来（每人两项）。</div>
+          <div class="q-match"><div>${q.names.map(n=>`<div>${n}</div>`).join("")}</div>
+          <div>${q.items.map((it,j)=>`<div>${LETTERS[j]}. ${it.t}</div>`).join("")}</div></div>`;
+      }
+      let ansTxt = "";
+      if(q.type==="single") ansTxt = `答案：${"ABCD"[q.opts.indexOf(q.ans)]}. ${q.ans}`;
+      else if(q.type==="fill") ansTxt = `答案：${q.blanks.map(b=>`${b[0]}＝${b[1]}`).join("；")}`;
+      else {
+        const LETTERS = "ABCDEFGHIJKLMNOPQRST";
+        ansTxt = `答案：${q.names.map(n=>`${n}—${q.items.map((it,j)=>it.who===n?LETTERS[j]:null).filter(Boolean).join("、")}`).join("；")}`;
+      }
+      return `<div class="q-card">
+        <div class="q-head"><span class="chip" style="font-size:12px;padding:1px 8px">${{single:"单选题",fill:"填空题",match:"连线题"}[q.type]}</span>
+          <span>${pts?`每题 ${pts} 分`:""}</span>
+          <span class="del" onclick="examDel(${i})">✕ 删除</span></div>
+        ${body}
+        <div id="qa${i}" style="display:none;margin-top:8px;padding:8px 12px;background:var(--accent-soft);border-radius:8px;font-size:14px;color:var(--accent-ink)">
+          ${ansTxt}${q.note?`<br>易错：${q.note}`:""}</div>
+        ${`<button class="mini-btn" style="margin-top:8px" onclick="examShowAns(${i})">查看答案</button>`}
+      </div>`;
+    }).join("");
+  }
+  renderExamCount();
+}
+
+/* ---- 生成：组装 A4 卷面 → 弹窗预览（同时写入打印容器） ---- */
+function examGenerate(){
+  if(!examQs.length){ document.getElementById("examTip").textContent = "还没有题目，请先生成"; return; }
+  const name = document.getElementById("examName").value.trim() || "历史关联网·关联练习";
+  const pts = examPerPts();
+  const CN = ["一","二","三","四","五","六","七","八","九","十","十一","十二"];
+  let s1 = "", s2 = "", si = -1, lastType = "";
+  examQs.forEach((q,i)=>{
+    const TYPE_LABEL = { single:"单选题", fill:"填空题", match:"连线题" };
+    if(q.type !== lastType){
+      si++; lastType = q.type;
+      s1 += `<h2>${CN[si]}、${TYPE_LABEL[q.type]}（每题 ${pts} 分）</h2>`;
+      if(q.type==="match") s1 += `<div class="tip">把人物与对应的信息项用线连起来（每人两项）。</div>`;
+    }
+    if(q.type==="single"){
+      s1 += `<div>${i+1}. ${q.stem}</div>` +
+            q.opts.map((o,j)=>`<div style="margin-left:2em">${"ABCD"[j]}. ${o}</div>`).join("") +
+            `<div style="margin-top:6px">答：<span class="blank" style="width:120px"></span></div>`;
+      s2 += `<div class="ans-line">${i+1}. ${"ABCD"[q.opts.indexOf(q.ans)]}　${q.ans}${q.note?`　<span style="color:#555">（易错：${q.note}）</span>`:""}</div>`;
+    } else if(q.type==="fill"){
+      s1 += `<div>${i+1}. ${q.name}，${q.blanks.map(b=>`${b[0]} <span class="blank" style="width:70px"></span>`).join("，")}。</div>`;
+      s2 += `<div class="ans-line">${i+1}. ${q.blanks.map(b=>`${b[0]}＝${b[1]}`).join("；")}</div>`;
+    } else {
+      const LETTERS = "ABCDEFGHIJKLMNOPQRST";
+      s1 += `<div style="display:flex;gap:60px;font-size:14px;line-height:2.2">
+          <div>${q.names.map(n=>`<div>${n}</div>`).join("")}</div>
+          <div>${q.items.map((it,j)=>`<div>${LETTERS[j]}. ${it.t}</div>`).join("")}</div>
+        </div>`;
+      s2 += `<div class="ans-line">${i+1}. ${q.names.map(n=>`${n}—${q.items.map((it,j)=>it.who===n?LETTERS[j]:null).filter(Boolean).join("、")}`).join("；")}</div>`;
+    }
+  });
+  const notes = `<h2>易错提醒（讲评时用）</h2><ul class="notes">${
+    [...new Set(examQs.filter(q=>q.note).map(q=>q.name))].slice(0,8).map(n=>{
+      const p = DB.find(x=>x.name===n); return `<li><b>${n}</b>：${p.note}</li>`;
+    }).join("")}</ul>`;
+  const sheets = `
+  <div class="sheet">
+    <h1>${name}</h1>
+    <div class="meta"><span>姓名 <span class="blank"></span></span><span>班级 <span class="blank"></span></span><span>日期 <span class="blank" style="width:70px"></span></span><span>得分 <span class="blank" style="width:50px"></span></span></div>
+    <hr>${s1}
+    <div class="foot">${name} · 教师用练习卷（${user.name}）</div>
+  </div>
+  <div class="sheet page-break">
+    <h1>答案页（教师用）</h1><hr>${s2}${notes}
+  </div>`;
+  document.getElementById("printRoot").innerHTML = sheets;   // 供 window.print() 使用
+  document.getElementById("a4Body").innerHTML = sheets;      // A4 排版效果预览
+  document.getElementById("a4Mask").classList.add("on");
+  document.getElementById("a4Body").scrollTop = 0;
+}
+function closeA4(){ document.getElementById("a4Mask").classList.remove("on"); }
+function doPrint(){ document.body.classList.add("printing"); window.print(); document.body.classList.remove("printing"); }
+
+renderExamDyns();
+renderExamPeople();
+renderExamQs();
+</script>
+</body>
+</html>
